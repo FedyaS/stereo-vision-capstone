@@ -29,9 +29,8 @@ from bench.profiling import machine_info
 from . import catalog, compute, images, jobs, synth
 from .params import describe_params
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_ROOT = REPO_ROOT / "results"
-WEB_DIST = REPO_ROOT / "app" / "web" / "dist"
+from bench.paths import RESULTS_DIR as RESULTS_ROOT
+from bench.paths import WEB_DIST_DIR as WEB_DIST
 
 app = FastAPI(title="Stereo Vision Playground", version="1.0.0")
 
@@ -386,6 +385,12 @@ def start_synthesis(req: SynthesizeRequest) -> JSONResponse:
 
 
 def _run_dirs() -> list[Path]:
+    """Stored runs, newest first.
+
+    ``results/keep/`` holds committed copies of runs, nested one level deeper,
+    so it has no ``results.csv`` of its own and is skipped by the check below
+    -- deliberately: a kept run is an archive, not a run this server owns.
+    """
     if not RESULTS_ROOT.is_dir():
         return []
     return sorted(
@@ -394,6 +399,21 @@ def _run_dirs() -> list[Path]:
         key=lambda d: d.name,
         reverse=True,
     )
+
+
+def _run_dir(run_id: str) -> Path:
+    """Resolve a run id to its folder, or 404.
+
+    ``Path(run_id).name`` strips any directory part. Starlette decodes path
+    parameters *after* routing, so ``{run_id}`` can arrive holding separators
+    (``..%2F..%2Fdata``) even though the route pattern does not match a literal
+    slash -- without this, ``RESULTS_ROOT / run_id`` would read outside
+    ``results/``. The report route already did this; the others did not.
+    """
+    d = RESULTS_ROOT / Path(run_id).name
+    if not (d.is_dir() and (d / "results.csv").exists()):
+        raise HTTPException(404, f"no run {run_id!r}")
+    return d
 
 
 @app.get("/api/runs")
@@ -424,9 +444,7 @@ def runs() -> JSONResponse:
 
 @app.get("/api/runs/{run_id}")
 def run_detail(run_id: str) -> JSONResponse:
-    d = RESULTS_ROOT / run_id
-    if not (d.is_dir() and (d / "results.csv").exists()):
-        raise HTTPException(404, f"no run {run_id!r}")
+    d = _run_dir(run_id)
     with open(d / "results.csv", newline="", encoding="utf-8") as f:
         rows = []
         for raw in csv.DictReader(f):
@@ -450,7 +468,7 @@ def run_detail(run_id: str) -> JSONResponse:
 @app.get("/api/runs/{run_id}/figure")
 def run_figure(run_id: str, name: str = Query(...)) -> Response:
     safe = Path(name).name  # strip any directory component
-    path = RESULTS_ROOT / run_id / "figures" / safe
+    path = _run_dir(run_id) / "figures" / safe
     if not path.is_file() or path.suffix.lower() != ".png":
         raise HTTPException(404, f"no figure {safe!r} in run {run_id!r}")
     return FileResponse(path, media_type="image/png")
@@ -472,10 +490,7 @@ def run_report(
     """
     from bench.explain import write_report
 
-    d = RESULTS_ROOT / Path(run_id).name
-    if not (d.is_dir() and (d / "results.csv").exists()):
-        raise HTTPException(404, f"no run {run_id!r}")
-
+    d = _run_dir(run_id)
     wanted = d / ("report.pdf" if format == "pdf" else "report.html")
     if refresh or not wanted.exists():
         try:
@@ -494,7 +509,7 @@ def run_report(
 
 @app.get("/api/runs/{run_id}/figures")
 def run_figures(run_id: str) -> JSONResponse:
-    folder = RESULTS_ROOT / run_id / "figures"
+    folder = _run_dir(run_id) / "figures"
     if not folder.is_dir():
         return ok([])
     return ok(sorted(p.name for p in folder.glob("*.png")))

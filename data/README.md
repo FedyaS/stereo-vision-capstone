@@ -44,7 +44,15 @@ Jadeplant needs 160 disparities, Teddy 64.
   so the non-occluded mask is computed rather than guessed. See
   `bench/synth/` and the README section on generating training images.
 - any folder with `im0`/`im1` (or `left`/`right`), e.g. the full-resolution
-  pair in `practice/`: `python -m bench run -d practice --downscale 6`.
+  pair in `notebooks/practice/`:
+  `python -m bench run -d notebooks/practice --downscale 6`.
+
+## What is committed here
+
+Nothing but this file. `data/` is ignored wholesale (`data/*` with
+`!data/README.md`), because everything in it is either downloaded by
+`scripts/get_dataset.py` or uploaded through the app's Datasets tab. See
+`docs/repository.md`.
 
 ## Generated datasets
 

@@ -386,8 +386,11 @@ def test_catalog_lists_and_loads_split_generated_datasets(tmp_path, monkeypatch)
     from app.server import catalog
     from bench.synth import generate_dataset, preset
 
+    # Redirect the path constant rather than the repo root, per bench.paths:
+    # the module reads it at call time, so the monkeypatch is seen, and the
+    # test cannot pick up a real dataset sitting in data/synth.
     root = tmp_path / "data" / "synth"
-    monkeypatch.setattr(catalog, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(catalog, "SYNTH_DATA_DIR", root)
     rules = preset("void").replace(
         width=160, height=112, ndisp=32, supersample=1, shadows=False,
         min_objects=2, max_objects=3,

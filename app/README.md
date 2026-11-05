@@ -8,6 +8,12 @@ training data with exact ground truth.
 Python backend (FastAPI) + TypeScript/React frontend (Vite). Everything runs
 on your machine; nothing is uploaded anywhere.
 
+This app is a front end onto the `bench` harness — it imports it and calls the
+same functions the CLI does, rather than reimplementing a stereo run. See
+[`docs/architecture.md`](../docs/architecture.md) for the process boundaries
+(which server, which port, which thread, which cache) and
+[`docs/repository.md`](../docs/repository.md) for what is committed.
+
 ---
 
 ## Run it

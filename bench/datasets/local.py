@@ -4,7 +4,7 @@ Expects ``im0``/``im1`` (Middlebury naming) or ``left``/``right``, in any
 common image format. Ground truth is picked up if ``disp0GT.pfm`` or
 ``disp0.pfm`` sits alongside. Without ground truth you still get timing and
 resource numbers plus the output maps -- useful for the full-resolution pair
-already in ``practice/``.
+already in ``notebooks/practice/``.
 """
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ def load_image_pair(
 
     ``downscale`` divides both image dimensions, and scales the disparity
     range and ground truth with them -- handy for the 2964x2000 pair in
-    ``practice/``, where a from-scratch matcher at full size would take a very
-    long time.
+    ``notebooks/practice/``, where a from-scratch matcher at full size would
+    take a very long time.
     """
     import cv2
 
@@ -51,12 +51,27 @@ def load_image_pair(
     if not folder.is_dir():
         raise NotADirectoryError(f"{folder} is not a directory")
 
-    left = cv2.cvtColor(
-        cv2.imread(str(_find(folder, _LEFT_NAMES)), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
-    )
-    right = cv2.cvtColor(
-        cv2.imread(str(_find(folder, _RIGHT_NAMES)), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
-    )
+    def _read_rgb(path: Path) -> np.ndarray:
+        # cv2.imread returns None for a file it cannot decode rather than
+        # raising, and cv2.cvtColor(None, ...) then fails with an unhelpful
+        # "src is not a numpy array". Say which file and why instead.
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError(
+                f"{path}: OpenCV could not decode this image. It may be "
+                "truncated, or an extension OpenCV does not support."
+            )
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    left = _read_rgb(_find(folder, _LEFT_NAMES))
+    right = _read_rgb(_find(folder, _RIGHT_NAMES))
+    if left.shape != right.shape:
+        raise ValueError(
+            f"{folder}: the two views differ in size -- left {left.shape[1]}x"
+            f"{left.shape[0]}, right {right.shape[1]}x{right.shape[0]}. A "
+            "rectified pair has matching dimensions; matching along a row is "
+            "meaningless otherwise."
+        )
 
     calib: dict = {}
     if (folder / "calib.txt").exists():

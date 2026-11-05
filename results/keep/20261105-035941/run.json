@@ -1,0 +1,35 @@
+{
+  "created_utc": "2026-11-05T04:26:54.569262+00:00",
+  "elapsed_s": 1632.13,
+  "config": {
+    "repeats": 1,
+    "warmup": 1,
+    "threads": null,
+    "eval_region": "nonocc",
+    "save_maps": false,
+    "save_figures": true,
+    "max_volume_gb": 4.0,
+    "out_dir": "results"
+  },
+  "machine": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.0",
+    "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "cpu_count_logical": 32,
+    "cpu_count_physical": 24,
+    "ram_total_gb": 34.03,
+    "cpu_brand": "13th Gen Intel(R) Core(TM) i9-13900HX",
+    "opencv": "4.13.0",
+    "opencv_threads": 32,
+    "numpy": "2.3.0",
+    "torch": "2.11.0+cpu",
+    "torch_cuda": false,
+    "onnxruntime": "1.31.1",
+    "onnxruntime_providers": [
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ]
+  },
+  "n_cells": 345,
+  "n_ok": 345
+}

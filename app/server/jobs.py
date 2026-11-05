@@ -13,18 +13,18 @@ import threading
 import time
 import traceback
 import uuid
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
 
 from bench.algorithms import select
 from bench.runner import CellResult, RunConfig, _save_disparity_png, _save_scene_reference, _slug, run_cell
 from bench.types import StereoPair
 
-from . import catalog
+from bench.paths import RESULTS_DIR as RESULTS_ROOT
+from bench.paths import describe as _describe
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_ROOT = REPO_ROOT / "results"
+from . import catalog
 
 
 @dataclass
@@ -48,9 +48,27 @@ class Job:
         return d
 
 
-_jobs: dict[str, Job] = {}
+_jobs: "OrderedDict[str, Job]" = OrderedDict()
 _cancel: dict[str, threading.Event] = {}
 _lock = threading.Lock()
+
+#: How many finished jobs to remember. The server is long-lived and every
+#: batch run left a Job (with up to 120 log lines) in here forever, so a day
+#: of poking at the UI grew the dict without bound. Only ``listing()``'s most
+#: recent 20 are ever shown; keep twice that so a cancel or a poll arriving
+#: late still finds its job. Running jobs are never evicted.
+_JOB_LIMIT = 40
+
+
+def _evict_locked() -> None:
+    """Drop the oldest *finished* jobs. Caller holds ``_lock``."""
+    while len(_jobs) > _JOB_LIMIT:
+        for job_id, job in _jobs.items():
+            if job.status != "running":
+                del _jobs[job_id]
+                break
+        else:  # every remaining job is still running -- nothing to evict
+            return
 
 
 def get(job_id: str) -> Job:
@@ -98,6 +116,7 @@ def start_benchmark(
     with _lock:
         _jobs[job.id] = job
         _cancel[job.id] = stop
+        _evict_locked()
 
     def worker() -> None:
         from datetime import datetime, timezone
@@ -111,7 +130,10 @@ def start_benchmark(
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "maps").mkdir(exist_ok=True)
             (out_dir / "figures").mkdir(exist_ok=True)
-            job.out_dir = str(out_dir.relative_to(REPO_ROOT))
+            # A repo-relative path for the UI to show -- but fall back to the
+            # absolute one, because a test redirects RESULTS_ROOT to a tmp dir
+            # outside the checkout and relative_to() would raise there.
+            job.out_dir = _describe(out_dir)
 
             config = RunConfig(
                 repeats=repeats, warmup=warmup, eval_region=eval_region,
@@ -222,7 +244,7 @@ def start_synthesis(
 
     def worker() -> None:
         try:
-            job.out_dir = str(out_dir.relative_to(REPO_ROOT)).replace("\\", "/")
+            job.out_dir = _describe(out_dir)
 
             def progress(done: int, total: int, row: dict[str, Any]) -> None:
                 job.done = done

@@ -23,6 +23,7 @@ from typing import Any
 import numpy as np
 
 from bench.datasets import load_synth_dataset
+from bench.paths import SYNTH_DATA_DIR, describe as describe_path
 from bench.synth import (
     DIFFICULTY_PRESETS,
     ENVIRONMENTS,
@@ -34,8 +35,7 @@ from bench.synth import (
 from bench.synth.preview import pair_views, preview_pairs, preview_report
 from bench.types import StereoPair
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SYNTH_ROOT = REPO_ROOT / "data" / "synth"
+SYNTH_ROOT = SYNTH_DATA_DIR
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 
@@ -168,7 +168,7 @@ def list_datasets() -> list[dict[str, Any]]:
             continue
         out.append({
             "name": d.name,
-            "path": str(d.relative_to(REPO_ROOT)).replace("\\", "/"),
+            "path": describe_path(d),
             "count": m.get("count", 0),
             "created_utc": m.get("created_utc"),
             "elapsed_s": m.get("elapsed_s"),

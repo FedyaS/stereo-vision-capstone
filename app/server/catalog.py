@@ -24,10 +24,10 @@ import numpy as np
 from bench.datasets import list_middlebury_scenes, load_middlebury_scene
 from bench.datasets.local import load_image_pair
 from bench.datasets.synthetic import make_synthetic_pair
+from bench.paths import CUSTOM_DATA_DIR as CUSTOM_ROOT
+from bench.paths import REPO_ROOT
+from bench.paths import SYNTH_DATA_DIR
 from bench.types import StereoPair
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CUSTOM_ROOT = REPO_ROOT / "data" / "custom"
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 
@@ -79,7 +79,7 @@ SYNTH_SAMPLES_LISTED = 12
 
 def list_synth_datasets() -> list[str]:
     """Names of generated datasets under ``data/synth``."""
-    root = REPO_ROOT / "data" / "synth"
+    root = SYNTH_DATA_DIR
     if not root.is_dir():
         return []
     return sorted(
@@ -92,7 +92,7 @@ def scene_ids() -> list[str]:
     ids = [f"middlebury/{s}" for s in list_middlebury_scenes()]
     ids += [f"custom/{s}" for s in list_custom()]
     for name in list_synth_datasets():
-        root = REPO_ROOT / "data" / "synth" / name
+        root = SYNTH_DATA_DIR / name
         # Via the shared helper, so a split dataset (train/00000) lists just
         # as well as a flat one (00000). The relative path becomes part of
         # the scene id, which keeps ids unique across splits.
@@ -128,7 +128,7 @@ def load(scene_id: str, *, downscale: float = 1.0) -> StereoPair:
         # written by the synthesizer in the Middlebury layout, so the
         # ordinary folder loader reads it.
         dataset, _, sample = rest.partition("/")
-        root = REPO_ROOT / "data" / "synth" / safe_name(dataset)
+        root = SYNTH_DATA_DIR / safe_name(dataset)
         parts = [p for p in Path(sample).parts if p not in ("", ".", "..")]
         if not parts or len(parts) > 2:
             raise ValueError(f"bad generated sample id {scene_id!r}")

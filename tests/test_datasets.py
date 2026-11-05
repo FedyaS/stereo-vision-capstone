@@ -13,6 +13,7 @@ from bench.datasets import (
     resolve_pairs,
 )
 from bench.datasets.middlebury import parse_calib, write_pfm
+from bench.paths import PRACTICE_DIR
 
 
 def test_synthetic_pair_is_self_consistent():
@@ -110,11 +111,17 @@ def test_resolve_pairs_synthetic_count():
 
 
 def test_local_loader_reads_practice_folder():
-    from pathlib import Path
+    """The committed sample pair, which doubles as the folder-dataset example.
 
-    folder = Path(__file__).resolve().parents[1] / "practice"
-    if not (folder / "im0.png").exists():
-        pytest.skip("practice/ images not present")
+    Asserted rather than skipped: these two PNGs are in the repository, so an
+    absent folder means something moved and the docs and ``bench.paths`` now
+    point at nothing. A skip here let exactly that pass unnoticed.
+    """
+    folder = PRACTICE_DIR
+    assert (folder / "im0.png").exists(), (
+        f"{folder} has no im0.png -- the committed sample pair moved; "
+        "update bench.paths.PRACTICE_DIR and the docs that cite it."
+    )
     pair = load_image_pair(folder, downscale=8)
     assert pair.left.shape == pair.right.shape
     assert pair.left.shape[0] < 400
