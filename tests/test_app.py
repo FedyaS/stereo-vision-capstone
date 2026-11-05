@@ -374,3 +374,42 @@ def test_generated_seed_joins_the_catalogue(client):
     })
     assert r.status_code == 200
     assert r.json()["metrics"] is not None
+
+
+def test_catalog_lists_and_loads_split_generated_datasets(tmp_path, monkeypatch):
+    """A split dataset must be addressable as a scene, like a flat one.
+
+    The catalogue originally assumed `synth/<set>/<sample>`. Splits add a
+    path segment, and without this the generated scenes silently vanish from
+    every picker -- the dataset is on disk and simply cannot be selected.
+    """
+    from app.server import catalog
+    from bench.synth import generate_dataset, preset
+
+    # Redirect the path constant rather than the repo root, per bench.paths:
+    # the module reads it at call time, so the monkeypatch is seen, and the
+    # test cannot pick up a real dataset sitting in data/synth.
+    root = tmp_path / "data" / "synth"
+    monkeypatch.setattr(catalog, "SYNTH_DATA_DIR", root)
+    rules = preset("void").replace(
+        width=160, height=112, ndisp=32, supersample=1, shadows=False,
+        min_objects=2, max_objects=3,
+    )
+    generate_dataset(
+        rules, 4, root / "withsplits", workers=1,
+        splits={"train": 0.5, "val": 0.5},
+    )
+    generate_dataset(rules, 2, root / "flat", workers=1)
+
+    ids = catalog.scene_ids()
+    assert "synth/withsplits/train/00000" in ids
+    assert "synth/withsplits/val/00002" in ids
+    assert "synth/flat/00000" in ids
+
+    catalog._cache.clear()
+    pair = catalog.load("synth/withsplits/train/00000")
+    assert pair.has_gt and pair.occ_mask is not None
+
+    for bad in ("synth/flat/../../escape", "synth/flat/a/b/c"):
+        with pytest.raises((ValueError, FileNotFoundError)):
+            catalog.load(bad)

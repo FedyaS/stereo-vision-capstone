@@ -26,7 +26,7 @@ from bench.algorithms import all_specs
 from bench.metrics import BAD_THRESHOLDS
 from bench.profiling import machine_info
 
-from . import catalog, compute, images, jobs
+from . import catalog, compute, images, jobs, synth
 from .params import describe_params
 
 from bench.paths import RESULTS_DIR as RESULTS_ROOT
@@ -281,6 +281,102 @@ def synthetic(req: SyntheticRequest) -> JSONResponse:
         return ok(catalog.describe(scene_id))
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+# --------------------------------------------------------------------------
+# the training-image synthesizer
+# --------------------------------------------------------------------------
+
+
+@app.get("/api/synth/schema")
+def synth_schema() -> JSONResponse:
+    """Every rule, its range and its help text, plus the presets.
+
+    Served from the dataclass rather than duplicated in the frontend, so the
+    editor cannot drift away from what the generator actually accepts.
+    """
+    return ok(synth.schema())
+
+
+class PreviewRequest(BaseModel):
+    rules: dict[str, Any]
+    samples: int = Field(3, ge=1, le=6)
+
+
+@app.post("/api/synth/preview")
+def synth_preview(req: PreviewRequest) -> JSONResponse:
+    """Render a few example pairs and report what they actually contain."""
+    from bench.synth import RuleError
+
+    try:
+        pv = synth.make_preview(req.rules, req.samples)
+    except RuleError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"{type(exc).__name__}: {exc}") from exc
+    return ok(pv.payload())
+
+
+@app.get("/api/synth/preview/image")
+def synth_preview_image(
+    preview_id: str = Query(...),
+    index: int = Query(0, ge=0),
+    view: str = Query("left"),
+) -> Response:
+    try:
+        img = synth.preview_image(preview_id, index, view)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    # Previews are regenerated on every edit, so they must not be cached.
+    return Response(
+        images.image_png(img),
+        headers={"Content-Type": "image/png", "Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/synth/datasets")
+def synth_datasets() -> JSONResponse:
+    return ok(synth.list_datasets())
+
+
+@app.delete("/api/synth/datasets/{name}")
+def synth_delete_dataset(name: str) -> JSONResponse:
+    try:
+        synth.delete_dataset(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    catalog._cache.clear()
+    return ok({"deleted": name})
+
+
+class SynthesizeRequest(BaseModel):
+    name: str
+    rules: dict[str, Any]
+    count: int = Field(10, ge=1, le=20000)
+    workers: int | None = Field(None, ge=1, le=64)
+    environments: list[str] | None = None
+    splits: dict[str, float] | None = None
+    append: bool = False
+
+
+@app.post("/api/jobs/synth")
+def start_synthesis(req: SynthesizeRequest) -> JSONResponse:
+    """Kick off mass generation in the background."""
+    from bench.synth import RuleError
+
+    try:
+        job = jobs.start_synthesis(
+            req.name, req.rules, req.count,
+            workers=req.workers, environments=req.environments,
+            splits=req.splits, append=req.append,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (RuleError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return ok(job.payload())
 
 
 # --------------------------------------------------------------------------

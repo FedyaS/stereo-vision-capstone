@@ -39,12 +39,14 @@ stereo-vision-capstone/
 │   ├── sweep*.py           parameter search and its report
 │   ├── splits.py           tune / held-out scene split
 │   ├── cli.py              python -m bench
+│   ├── paths.py            where everything lives on disk
 │   ├── datasets/           middlebury · synthetic · local
+│   ├── synth/              the training-image synthesizer (ray tracer)
 │   └── algorithms/         opencv · scratch · torch · learned
 │
 ├── app/            ✓ git   THE EXPLORER — a local web UI onto bench/
 │   ├── requirements.txt    extra deps, needed only for the app
-│   ├── README.md           the four tabs, and what to try in them
+│   ├── README.md           the five tabs, and what to try in them
 │   ├── server/             FastAPI: routes, compute, catalog, jobs, images
 │   └── web/                React + Vite frontend
 │       ├── src/            ✓ git
@@ -72,7 +74,9 @@ stereo-vision-capstone/
 │   ├── README.md           ✓ git (the one exception)
 │   ├── middlebury/         scripts/get_dataset.py        ~45 MB
 │   ├── downloads/          the zips, deleted after extraction
-│   └── custom/             pairs uploaded through the app's Datasets tab
+│   ├── custom/             pairs uploaded through the app's Datasets tab
+│   └── synth/              generated training sets; each carries the
+│                           rules.json that reproduces it bit for bit
 │
 ├── models/         ✗ git   INPUTS, fetched
 │   ├── README.md           ✓ git (the one exception)
@@ -165,6 +169,7 @@ root constant.
 |---|---|---|
 | a new algorithm | `bench/algorithms/` (or a new module, registered) | yes |
 | a new dataset loader | `bench/datasets/` | yes |
+| a new generated environment | `bench/synth/environments.py` | yes |
 | a test | `tests/` | yes |
 | a notebook | `notebooks/` | yes |
 | documentation | `docs/` | yes |

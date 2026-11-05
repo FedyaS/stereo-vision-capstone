@@ -2,7 +2,8 @@
 
 A local web app for poking at the benchmark: run any algorithm on any scene,
 drag its parameters and watch the disparity map change, compare matchers side
-by side, trigger real benchmark runs, and add your own image pairs.
+by side, trigger real benchmark runs, add your own image pairs, and generate
+training data with exact ground truth.
 
 Python backend (FastAPI) + TypeScript/React frontend (Vite). Everything runs
 on your machine; nothing is uploaded anywhere.
@@ -49,7 +50,7 @@ the backend on port 8000.
 
 ---
 
-## The four tabs
+## The five tabs
 
 ### Playground
 
@@ -132,6 +133,40 @@ construction rather than measured.
 Uploaded pairs must already be **rectified**: matching only searches along a
 row, so any vertical offset between the views is unrecoverable here.
 
+### Synthesize
+
+Build a training set. Pick an environment and a difficulty, adjust the rules,
+render a few examples, then generate as many pairs as you want.
+
+The example panel shows the left image, the right image, the ground truth and
+the occlusion mask together, on purpose: a rule set can render a handsome
+picture and supervise almost nothing, and you cannot tell from the left image
+alone. Alongside them are the *measured* statistics — ground-truth coverage,
+how much of the frame is visible to both cameras, the disparity range against
+the search range — plus warnings for the mistakes that are easy to make and
+hard to see, such as a search range the scene only fills a third of.
+
+Generation runs in the background across all cores and writes to
+`data/synth/<name>/` in the MiddEval3 layout, with a manifest recording the
+exact rules and seeds. The pairs appear in the scene picker as soon as the job
+finishes, so you can benchmark what you just made without an export step.
+
+Output is split into `train/`, `val/` and `test/` by default, with exact
+counts and no scene shared between them; untick "split" for one flat folder.
+On by default deliberately — every pair here comes from the same generator,
+so evaluating on pairs you trained on gives excellent numbers and no warning
+that anything is wrong.
+
+"Mix environments" cycles through several scene types instead of one; a model
+trained on a single environment generalises poorly, so that is usually what
+you want.
+
+The ground truth is exact rather than estimated — both views are ray traced
+independently from analytic 3-D geometry, so disparity comes from a solved
+`focal * baseline / Z` and the occlusion mask is a real visibility
+computation. See the main README for why this is a ray tracer and not a
+wrapper around Blender or Open3D.
+
 ---
 
 ## Notes
@@ -159,16 +194,23 @@ app/
     catalog.py    scene discovery, custom dataset upload
     params.py     turns adapter dataclasses into UI controls
     images.py     PNG rendering of disparity, error and mask views
-    jobs.py       background batch runs
+    jobs.py       background batch runs and dataset generation
+    synth.py      the synthesizer: preview cache, generated-dataset listing
   web/
     src/
       App.tsx       tab shell
       api.ts        typed client
       components.tsx shared controls
-      views/        Playground, Compare, Runs, Datasets
+      views/        Playground, Compare, Runs, Datasets, Synthesize
 ```
 
 The parameter controls are generated, not hand-written: every adapter is a
 dataclass, so its fields are its parameter list, and the sweep grids in
 `bench/sweep.py` supply the ranges worth searching. Add a parameter to an
 algorithm and a control for it appears here automatically.
+
+The Synthesize tab works the same way. Its editor is built from
+`/api/synth/schema`, which is served straight from `bench.synth.rules`, so a
+new rule gets a control with its range and help text without the frontend
+knowing it exists -- and the editor cannot drift away from what the generator
+will actually accept.

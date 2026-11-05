@@ -114,3 +114,84 @@ export interface Job {
   elapsed_s: number
   log: string[]
 }
+
+/* ------------------------------------------------------- the synthesizer */
+
+/** A rule set, as the generator accepts it. Values stay loosely typed: the
+ *  editor is built from the server's schema, so the frontend never needs to
+ *  know the field list and cannot drift out of step with the generator. */
+export type SceneRules = Record<string, unknown>
+
+export type RuleFieldType = 'int' | 'float' | 'bool' | 'choice' | 'multichoice'
+
+export interface RuleField {
+  name: string
+  type: RuleFieldType
+  group: string
+  label: string
+  help: string
+  default: unknown
+  min?: number
+  max?: number
+  step?: number
+  options?: { value: string; help?: string }[]
+}
+
+export interface SynthSchema {
+  fields: RuleField[]
+  environments: { value: string; label: string; help: string }[]
+  difficulties: { value: string; settings: Record<string, unknown> }[]
+  texture_kinds: string[]
+  defaults: SceneRules
+  presets: Record<string, SceneRules>
+}
+
+/** Measured properties of one generated pair — reported, not assumed. */
+export interface SynthStats {
+  gt_coverage: number
+  nonocc_fraction: number
+  occluded_fraction: number
+  out_of_range_fraction: number
+  disparity_min: number | null
+  disparity_max: number | null
+  disparity_mean: number | null
+  depth_min_m: number | null
+  depth_max_m: number | null
+  sky_fraction: number
+  edge_fraction: number
+  baseline_m: number
+  focal_px: number
+}
+
+export interface SynthSample {
+  index: number
+  seed: number
+  name: string
+  width: number
+  height: number
+  ndisp: number
+  stats: SynthStats
+}
+
+export interface SynthPreview {
+  preview_id: string
+  rules: SceneRules
+  summary: Partial<SynthStats>
+  warnings: string[]
+  samples: SynthSample[]
+}
+
+export interface SynthDataset {
+  name: string
+  path?: string
+  count: number
+  created_utc?: string | null
+  elapsed_s?: number | null
+  seconds_per_pair?: number | null
+  environments?: string[]
+  splits?: Record<string, number>
+  rules?: SceneRules
+  summary?: Record<string, { min: number; mean: number; max: number } | null>
+  cancelled?: boolean
+  error?: string
+}

@@ -5,14 +5,16 @@ import Playground from './views/Playground'
 import Compare from './views/Compare'
 import Runs from './views/Runs'
 import Datasets from './views/Datasets'
+import Synthesize from './views/Synthesize'
 
-type Tab = 'playground' | 'compare' | 'runs' | 'datasets'
+type Tab = 'playground' | 'compare' | 'runs' | 'datasets' | 'synthesize'
 
 const TABS: [Tab, string, string][] = [
   ['playground', 'Playground', 'one algorithm, live parameters'],
   ['compare', 'Compare', 'several algorithms, one scene'],
   ['runs', 'Runs', 'stored benchmarks and new batch runs'],
   ['datasets', 'Datasets', 'add image pairs and samples'],
+  ['synthesize', 'Synthesize', 'generate training images with exact ground truth'],
 ]
 
 export default function App() {
@@ -98,6 +100,7 @@ export default function App() {
             {tab === 'datasets' && (
               <Datasets scenes={scenes} onChanged={loadScenes} />
             )}
+            {tab === 'synthesize' && <Synthesize onChanged={loadScenes} />}
           </>
         )}
       </main>

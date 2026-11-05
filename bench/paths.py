@@ -28,6 +28,9 @@ DATA_DIR = REPO_ROOT / "data"
 MIDDLEBURY_DIR = DATA_DIR / "middlebury" / "MiddEval3"
 CUSTOM_DATA_DIR = DATA_DIR / "custom"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
+#: Training sets written by ``bench synth generate``. Not committed: they are
+#: reproducible from the ``rules.json`` each one carries.
+SYNTH_DATA_DIR = DATA_DIR / "synth"
 MODELS_DIR = REPO_ROOT / "models"
 
 # -- outputs: generated, ignored except results/keep/ ---------------------
@@ -64,6 +67,7 @@ __all__ = [
     "MIDDLEBURY_DIR",
     "CUSTOM_DATA_DIR",
     "DOWNLOADS_DIR",
+    "SYNTH_DATA_DIR",
     "MODELS_DIR",
     "RESULTS_DIR",
     "SWEEPS_DIR",

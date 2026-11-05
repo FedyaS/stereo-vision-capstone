@@ -1,5 +1,6 @@
 import type {
   Algorithm, ComputeResult, Job, RunDetail, RunSummary, Scene,
+  SceneRules, SynthDataset, SynthPreview, SynthSchema,
 } from './types'
 
 const BASE = '/api'
@@ -71,6 +72,41 @@ export const api = {
     req<Scene>('/datasets/synthetic', {
       method: 'POST', body: JSON.stringify({ seed }),
     }),
+
+  /* ---------------------------------------------------- the synthesizer */
+
+  synthSchema: () => req<SynthSchema>('/synth/schema'),
+
+  synthPreview: (rules: SceneRules, samples = 3) =>
+    req<SynthPreview>('/synth/preview', {
+      method: 'POST', body: JSON.stringify({ rules, samples }),
+    }),
+
+  synthDatasets: () => req<SynthDataset[]>('/synth/datasets'),
+
+  deleteSynthDataset: (name: string) =>
+    req<{ deleted: string }>(`/synth/datasets/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
+
+  startSynthesis: (body: {
+    name: string
+    rules: SceneRules
+    count: number
+    workers?: number | null
+    environments?: string[] | null
+    splits?: Record<string, number> | null
+    append?: boolean
+  }) => req<Job>('/jobs/synth', { method: 'POST', body: JSON.stringify(body) }),
+}
+
+/** A preview image. Previews are regenerated on every rule change, so the
+ *  URL carries the preview id and the server sends `no-store`. */
+export function synthPreviewUrl(previewId: string, index: number, view: string) {
+  const q = new URLSearchParams({
+    preview_id: previewId, index: String(index), view,
+  })
+  return `${BASE}/synth/preview/image?${q}`
 }
 
 /** Image URLs are plain GETs so the browser caches and streams them. */
