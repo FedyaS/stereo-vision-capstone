@@ -54,6 +54,20 @@ Nothing above is strictly required to get started -- with no dataset and no
 weights, `python -m bench run -d synthetic:3` still works, because the
 synthetic generator produces pairs with exact ground truth in-process.
 
+Need more data than Middlebury's 15 scenes? Generate it:
+
+```bash
+python -m bench synth preview -e room --difficulty medium --open
+```
+
+```bash
+python -m bench synth generate -n 500 --out data/synth/set1 --environments room corridor tabletop
+```
+
+Ray-traced 3-D scenes with exact ground truth and true occlusion, split into
+`train`/`val`/`test`, with no download and no extra dependency. See
+[Generating training images](#generating-training-images).
+
 ---
 
 ## What is included
@@ -117,12 +131,102 @@ accuracy/time dial, so it sits in the same table as SGBM's path count.
 |---|---|
 | `middlebury` | all 15 MiddEval3 quarter-res training scenes, dense float ground truth, non-occluded masks, per-scene `ndisp` |
 | `middlebury:Teddy,Piano` | just those scenes |
-| `synthetic[:N]` | generated pairs, **exact** ground truth, no download |
+| `synthetic[:N]` | warp-generated pairs, **exact** ground truth, no download |
+| `synth:<env>[:N[:difficulty]]` | ray-traced 3-D scenes: exact ground truth **and** true occlusion, no download |
 | `practice` (any folder) | a folder with `im0`/`im1`; add `--downscale 6` for the 2964x2000 pair already in the repo |
+| a generated dataset folder | every sample of a set written by `bench synth generate` |
 
 Each Middlebury scene brings its own disparity range from `calib.txt`, and the
 harness uses it: Jadeplant needs 160 disparities, Teddy needs 64. Giving every
 scene the same oversized range would make the easy scenes look needlessly slow.
+
+### Generating training images
+
+Middlebury has 15 scenes. That is enough to benchmark on and nowhere near
+enough to train on, and there is no more of it. `bench/synth/` closes that gap:
+it ray traces 3-D scenes into rectified stereo pairs whose disparity is exact
+by construction, as many as you want, on the CPU.
+
+```bash
+python -m bench synth environments                      # what can be generated
+python -m bench synth preview -e corridor --difficulty hard
+python -m bench synth generate -n 500 --out data/synth/set1 --environments room corridor tabletop
+```
+
+or in the app's **Synthesize** tab: edit the rules, render examples, then
+generate. Generated sets appear in the scene picker immediately, so you can
+benchmark them without an export step.
+
+**Splits.** Output is divided into `train/`, `val/` and `test/` by default —
+override with `--splits train=0.9,val=0.1`, or `--splits ''` for one flat
+directory. Counts are exact, and every pair has its own seed and its own
+scene, so the splits share no geometry. That matters more here than usual:
+every pair comes from the same generator, so evaluating on pairs you trained
+on would give excellent numbers and no warning that anything was wrong. Any
+split loads on its own:
+
+```bash
+python -m bench run -d data/synth/set1/test -a opencv_sgbm
+```
+
+**Why a ray tracer and not Blender or Open3D.** Every off-the-shelf option
+costs more than it gives here. `bpy` is a ~1 GB wheel pinned to one exact
+CPython version that can only be imported once per process, which fights the
+multiprocess fan-out mass generation needs. Open3D and pyrender render through
+an offscreen OpenGL context, which on headless Windows has a long history of
+failing *silently* — returning a plausible buffer of zeros. That is the worst
+possible failure mode for a ground-truth generator, because the dataset looks
+fine until you train on it. And all of them hand back depth from a z-buffer:
+quantised, interpolated across triangles, clipped by the near and far planes.
+
+Solving the ray–surface equation instead gives the exact distance to an
+analytic surface, in pure NumPy, with **no new dependency**, no GPU, no
+display, and identical output on every platform. For tens of primitives rather
+than millions of triangles it is also fast enough — roughly 0.1–0.5 s per pair
+at 320x224, across all cores.
+
+**What makes the ground truth trustworthy.** Both views are traced
+independently from the same geometry, so:
+
+- disparity is `focal_px * baseline / Z` from an exact `Z`, not a z-buffer read;
+- occlusion is **physical**. The `mask0nocc` region comes from comparing the
+  two ray-traced depth maps, so it marks the surfaces the right camera really
+  cannot see. The older `synthetic` generator warps one image into the other,
+  which cannot model occlusion at all and masks a guessed band instead;
+- ground truth is `nan` where it is genuinely unknown — sky, pixels straddling
+  a depth discontinuity where no single true disparity exists, and anything
+  past `ndisp`;
+- the baseline is **fitted per scene** so disparities fill the search range. A
+  fixed rig gives 8 px of disparity in a corridor and 400 on a tabletop, so
+  half a generated set would otherwise waste the range or overflow it.
+
+**Seven environments**, each a different *shape* of depth distribution, which
+is the axis real benchmarks actually differ along: `tabletop`, `room`,
+`corridor`, `warehouse` (deliberately repetitive, to punish local matchers),
+`street` and `terrain` (open sky, so some pixels legitimately have no ground
+truth), and `void`.
+
+**The rules** control framing, clutter, texture, lighting and sensor
+behaviour, and are saved next to the images, so a dataset can be audited and
+regenerated bit for bit. The knobs that matter most are the texture ones —
+`texture_richness` and `textureless_fraction` move a real matcher's error far
+more than geometry does. Sensor noise, exposure mismatch and defocus are drawn
+*independently per view*, because identical noise in both eyes cancels out of
+every matching cost and is what makes naive synthetic data fail to transfer.
+
+Previewing reports measured statistics rather than assumed ones, and warns
+about the rule sets that render beautifully and supervise nothing — a search
+range the scene never fills, ground truth covering a third of the frame.
+
+Sanity check, with `opencv_sgbm` on 320x224 generated pairs:
+
+| difficulty | bad2 (all) | EPE (answered) |
+|---|---|---|
+| easy | 11% | 0.31 px |
+| hard | 42% | 2.27 px |
+
+Sub-pixel end-point error on the easy set is only achievable if the geometry
+is right; an off-by-one or a sign error would put it in the tens of pixels.
 
 ---
 
@@ -452,8 +556,17 @@ bench/
   cli.py                python -m bench
   datasets/
     middlebury.py       MiddEval3 loader + PFM reader/writer
-    synthetic.py        generated pairs with exact ground truth
+    synthetic.py        warp-generated pairs with exact ground truth
     local.py            any folder of rectified images
+  synth/                the training-image synthesizer (pure NumPy, no new deps)
+    rules.py            SceneRules: every knob, validated, JSON round-trips
+    environments.py     seven scene samplers, one per depth distribution
+    shapes.py           analytic primitives with vectorised ray intersection
+    materials.py        hashed value noise, solid textures, materials
+    render.py           the ray tracer and the rectified stereo rig
+    pipeline.py         sensor simulation, StereoPair, parallel dataset writing
+    preview.py          contact sheets and the "is this data usable?" report
+    cli.py              python -m bench synth
   algorithms/
     base.py             the registry and the output contract
     opencv_classical.py

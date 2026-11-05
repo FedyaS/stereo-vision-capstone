@@ -168,3 +168,92 @@ def start_benchmark(
 
     threading.Thread(target=worker, daemon=True, name=f"job-{job.id}").start()
     return job
+
+
+def start_synthesis(
+    name: str,
+    rules: dict[str, Any],
+    count: int,
+    *,
+    workers: int | None = None,
+    environments: list[str] | None = None,
+    splits: dict[str, float] | None = None,
+    append: bool = False,
+) -> Job:
+    """Generate a synthetic dataset in the background.
+
+    Mass generation is minutes of CPU, so it goes to a worker thread with
+    pollable progress exactly like a benchmark sweep -- and from there fans
+    out across processes, because ray tracing is pure NumPy and scales with
+    cores. The thread exists only so the HTTP request can return immediately.
+
+    ``append`` continues an existing dataset instead of refusing: sample
+    numbering picks up where the last one left off, and because sample *n*
+    uses seed ``rules.seed + n``, the new pairs are different scenes rather
+    than repeats of the ones already there.
+    """
+    from bench.synth import SceneRules, generate_dataset
+
+    from . import synth as synth_mod
+
+    name = synth_mod.safe_name(name)
+    parsed = SceneRules.from_dict(rules)  # raises RuleError on a bad rule set
+    if count < 1:
+        raise ValueError("count must be at least 1")
+
+    out_dir = synth_mod.dataset_dir(name)
+    start_index = 0
+    if out_dir.exists():
+        from bench.datasets import synth_sample_dirs
+
+        existing = synth_sample_dirs(out_dir)
+        if existing and not append:
+            raise FileExistsError(
+                f"a dataset named {name!r} already exists with "
+                f"{len(existing)} pair(s); choose another name or append"
+            )
+        start_index = len(existing)
+
+    job = Job(id=uuid.uuid4().hex[:12], kind="synthesis", total=count)
+    stop = threading.Event()
+    with _lock:
+        _jobs[job.id] = job
+        _cancel[job.id] = stop
+
+    def worker() -> None:
+        try:
+            job.out_dir = str(out_dir.relative_to(REPO_ROOT)).replace("\\", "/")
+
+            def progress(done: int, total: int, row: dict[str, Any]) -> None:
+                job.done = done
+                job.current = row.get("name", "")
+                if done <= 5 or done % max(1, total // 20) == 0 or done == total:
+                    job.log.append(
+                        f"{row.get('name')}: {row.get('render_s', 0):.2f}s "
+                        f"cov={row.get('gt_coverage')} "
+                        f"nonocc={row.get('nonocc_fraction')} "
+                        f"d<={row.get('disparity_max')}"
+                    )
+
+            result = generate_dataset(
+                parsed, count, out_dir,
+                workers=workers, start_index=start_index,
+                progress=progress, should_stop=stop.is_set,
+                environments=environments, splits=splits,
+            )
+            job.status = "cancelled" if result.cancelled else "done"
+            job.message = (
+                f"{result.count} pair(s) in {result.elapsed_s:.1f}s "
+                f"-> data/synth/{name}"
+            )
+        except Exception as exc:
+            job.status = "error"
+            job.message = f"{type(exc).__name__}: {exc}"
+            job.log.append(traceback.format_exc(limit=6))
+        finally:
+            job.finished = time.time()
+            with _lock:
+                _cancel.pop(job.id, None)
+
+    threading.Thread(target=worker, daemon=True, name=f"synth-{job.id}").start()
+    return job

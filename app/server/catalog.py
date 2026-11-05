@@ -70,9 +70,36 @@ def list_custom() -> list[str]:
     )
 
 
+#: How many samples of each generated dataset to expose as individually
+#: selectable scenes. A generated set can hold thousands of pairs, and a
+#: picker listing all of them is unusable; a batch run over the whole set is
+#: what the Runs tab is for.
+SYNTH_SAMPLES_LISTED = 12
+
+
+def list_synth_datasets() -> list[str]:
+    """Names of generated datasets under ``data/synth``."""
+    root = REPO_ROOT / "data" / "synth"
+    if not root.is_dir():
+        return []
+    return sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and (d / "manifest.json").is_file()
+    )
+
+
 def scene_ids() -> list[str]:
     ids = [f"middlebury/{s}" for s in list_middlebury_scenes()]
     ids += [f"custom/{s}" for s in list_custom()]
+    for name in list_synth_datasets():
+        root = REPO_ROOT / "data" / "synth" / name
+        # Via the shared helper, so a split dataset (train/00000) lists just
+        # as well as a flat one (00000). The relative path becomes part of
+        # the scene id, which keeps ids unique across splits.
+        from bench.datasets import synth_sample_dirs
+
+        for d in synth_sample_dirs(root)[:SYNTH_SAMPLES_LISTED]:
+            ids.append(f"synth/{name}/{d.relative_to(root).as_posix()}")
     seeds = list(_DEFAULT_SEEDS) + sorted(_extra_seeds)
     ids += [f"synthetic/seed{i}" for i in seeds]
     return ids
@@ -95,6 +122,23 @@ def load(scene_id: str, *, downscale: float = 1.0) -> StereoPair:
         folder = CUSTOM_ROOT / safe_name(rest)
         if not folder.is_dir():
             raise FileNotFoundError(f"no custom dataset named {rest!r}")
+        pair = load_image_pair(folder, name=scene_id)
+    elif kind == "synth":
+        # synth/<dataset>/<sample> or synth/<dataset>/<split>/<sample>,
+        # written by the synthesizer in the Middlebury layout, so the
+        # ordinary folder loader reads it.
+        dataset, _, sample = rest.partition("/")
+        root = REPO_ROOT / "data" / "synth" / safe_name(dataset)
+        parts = [p for p in Path(sample).parts if p not in ("", ".", "..")]
+        if not parts or len(parts) > 2:
+            raise ValueError(f"bad generated sample id {scene_id!r}")
+        folder = root.joinpath(*parts)
+        # Containment check: `safe_name` guards the dataset, and this guards
+        # the rest of the path, so a crafted id cannot escape data/synth.
+        if not folder.resolve().is_relative_to(root.resolve()):
+            raise ValueError(f"bad generated sample id {scene_id!r}")
+        if not folder.is_dir():
+            raise FileNotFoundError(f"no generated sample {rest!r}")
         pair = load_image_pair(folder, name=scene_id)
     else:
         raise ValueError(f"unknown scene id {scene_id!r}")
@@ -142,10 +186,13 @@ def describe(scene_id: str) -> dict[str, Any]:
     """Light metadata for the scene list, without decoding the full pair."""
     pair = load(scene_id)
     h, w = pair.shape
+    kind, _, rest = scene_id.partition("/")
     return {
         "id": scene_id,
-        "kind": scene_id.split("/")[0],
-        "name": scene_id.split("/")[-1],
+        "kind": kind,
+        # Everything after the kind, so the twelve listed samples of two
+        # different generated datasets do not all show up as "00000".
+        "name": rest or scene_id,
         "width": w,
         "height": h,
         "ndisp": pair.ndisp,

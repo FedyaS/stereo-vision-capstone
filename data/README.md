@@ -37,9 +37,46 @@ Jadeplant needs 160 disparities, Teddy 64.
 ## Other sources
 
 - `synthetic` -- generated in-process with exact ground truth, no download
-  needed. See `bench/datasets/synthetic.py`.
+  needed. One image is warped into the other, so occlusion is approximated
+  rather than modelled. See `bench/datasets/synthetic.py`.
+- `synth:<environment>` -- ray-traced 3-D scenes, also in-process and also
+  exact, but with *physical* occlusion: both views are traced independently,
+  so the non-occluded mask is computed rather than guessed. See
+  `bench/synth/` and the README section on generating training images.
 - any folder with `im0`/`im1` (or `left`/`right`), e.g. the full-resolution
   pair in `practice/`: `python -m bench run -d practice --downscale 6`.
+
+## Generated datasets
+
+`python -m bench synth generate --out data/synth/<name>` writes one folder per
+pair in exactly the MiddEval3 layout above, so generated data loads through
+the same code path as a downloaded scene. By default the pairs are divided
+into disjoint subsets:
+
+```
+data/synth/<name>/
+  train/00000/ ...    80%
+  val/00008/   ...    10%
+  test/00009/  ...    10%
+```
+
+Counts are exact, and every pair has its own seed and its own scene, so no
+geometry is shared between splits. `--splits ''` writes one flat directory
+instead, and any split loads on its own:
+
+```
+python -m bench run -d data/synth/<name>/test -a opencv_sgbm
+```
+
+Alongside the samples it writes:
+
+```
+manifest.json    the rules, the seeds, and the measured statistics per pair
+rules.json       the rule set on its own, enough to regenerate bit for bit
+README.md        what the set contains and how it was made
+```
+
+`data/synth/` is not committed -- regenerate it from `rules.json`.
 
 ## Citation
 

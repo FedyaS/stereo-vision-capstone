@@ -52,7 +52,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
     else:
         print("                     not downloaded -- run scripts/get_dataset.py")
     print("   synthetic[:N]     generated pairs with exact ground truth")
+    print("   synth:<env>[:N]   ray-traced 3-D scenes, exact GT and occlusion")
     print("   <folder>          a folder containing im0/im1 (e.g. `practice`)")
+    print("                     or a generated dataset (all of its samples)")
+    print()
+    from .synth import ENVIRONMENTS
+
+    print(f"   synth environments: {', '.join(ENVIRONMENTS)}")
+    print("   see `python -m bench synth environments` for what each one is")
     print()
 
     if args.verbose:
@@ -349,6 +356,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="how many methods per gallery scene (the best, plus "
                     "the worst for contrast)")
     pe.set_defaults(func=_cmd_explain)
+
+    from .synth.cli import add_subparser as _add_synth
+
+    _add_synth(sub)
 
     return p
 

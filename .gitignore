@@ -41,3 +41,6 @@ app/web/dist/
 
 # Datasets uploaded through the app UI
 data/custom/
+
+# Generated training sets (regenerate from their rules.json)
+data/synth/
