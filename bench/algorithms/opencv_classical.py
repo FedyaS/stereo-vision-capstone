@@ -78,13 +78,14 @@ class OpenCVBlockMatcher:
     expect a sparse map -- which is the point of also reporting ``density``.
     """
 
-    # Defaults below were chosen by the sweep in `bench/sweep.py` on the tune
-    # split (see results/sweeps/). Dropping uniqueness_ratio from 10 to 5 and
-    # the texture threshold to 0 is worth 1.8 points of bad2_all: StereoBM is
-    # already sparse, and tightening its acceptance tests further costs more
-    # in blanks (each counted as an error) than it saves in bad matches.
-    block_size: int = 15
-    uniqueness_ratio: int = 5
+    # Defaults below come from two sweep rounds on the tune split (see
+    # results/sweeps/). Both rounds pushed the acceptance tests *down*, and
+    # round two switched the uniqueness test off entirely. StereoBM is
+    # already the sparsest matcher here, and under `bad2_all` an unanswered
+    # pixel counts as an error, so refusing to guess is never rewarded --
+    # see the metric caveat in the README before copying these elsewhere.
+    block_size: int = 17
+    uniqueness_ratio: int = 0
     # Note this is compared against a SAD-based texture score, not an
     # intensity: measured on Middlebury it does nothing at all below ~200 and
     # only starts rejecting pixels past ~1000. Sweeping it over 0..20, as the
@@ -128,11 +129,14 @@ class OpenCVSGBM:
     """StereoSGBM: Hirschmuller semi-global matching on a Birchfield-Tomasi cost."""
 
     mode: int = 0
-    # Tuned on the tune split (see results/sweeps/). The sweep moved the
-    # OpenCV-documented P1/P2 recommendation from 8/32 to 4/64 and halved
-    # uniqueness_ratio, worth ~1.2 points of bad2_all across all four modes:
-    # a wider P2/P1 ratio lets the solver hold a surface through texture
-    # while still paying heavily for a genuine depth jump.
+    # Tuned over two rounds on the tune split (see results/sweeps/). The
+    # sweep moved the OpenCV-documented P1/P2 recommendation from 8/32 to
+    # 4/64 -- a wider ratio holds a surface together through texture while
+    # still paying heavily for a genuine depth jump -- and then took
+    # uniqueness_ratio to 0, which disables the ambiguity test. That last
+    # one is the metric talking rather than the algorithm: blanks count as
+    # errors in bad2_all, so abstaining is never worth it. The per-mode
+    # overrides below carry the rest.
     block_size: int = 5
     # P1/P2 as multiples of `channels * blockSize^2`, which is how the OpenCV
     # documentation states its recommendation (8 and 32). Keeping them as
@@ -140,7 +144,7 @@ class OpenCVSGBM:
     # stays proportional to the matching cost when the block size changes.
     p1_mult: int = 4
     p2_mult: int = 64
-    uniqueness_ratio: int = 5
+    uniqueness_ratio: int = 0
     speckle_window_size: int = 100
     speckle_range: int = 2
     disp12_max_diff: int = 1
@@ -257,9 +261,10 @@ class OpenCVQuasiDense:
     """
 
     corr_win_size: int = 5
-    # 0.6 -> 0.4 is worth 1.7 points: a laxer growing test trades a little
-    # precision for noticeably more coverage, and blanks count as errors.
-    correlation_threshold: float = 0.4
+    # 0.6 -> 0.4 -> 0.2 over two sweep rounds. Each loosening trades a
+    # little precision for more coverage, which `bad2_all` always accepts
+    # because an unanswered pixel scores the same as a wrong one.
+    correlation_threshold: float = 0.2
     # `neighborhoodSize` is deliberately left at OpenCV's default of 5: the
     # growing step indexes a neighbourhood against a fixed 15px border, and
     # raising it throws an untyped C++ exception out of `process`.
@@ -347,6 +352,7 @@ _sgbm_entry(
     "StereoSGBM_MODE_SGBM",
     "StereoSGBM, 5-path aggregation (OpenCV default)",
     block_size=7,
+    p1_mult=2,
     p2_mult=32,
 )
 _sgbm_entry(
@@ -354,6 +360,8 @@ _sgbm_entry(
     "StereoSGBM_MODE_HH",
     "StereoSGBM, full 8-path whole-image dynamic programming",
     "accurate",
+    p1_mult=2,
+    p2_mult=32,
 )
 _sgbm_entry(
     "opencv_sgbm_3way",
@@ -376,7 +384,7 @@ _sgbm_entry(
     check=_check_ximgproc,
 )
 def _sgbm_wls() -> OpenCVWLS:
-    return OpenCVWLS(base="sgbm", lambda_=1000.0, sigma_color=1.5, block_size=5)
+    return OpenCVWLS(base="sgbm", lambda_=100.0, sigma_color=1.8, block_size=5)
 
 
 @register(
@@ -387,7 +395,7 @@ def _sgbm_wls() -> OpenCVWLS:
     check=_check_ximgproc,
 )
 def _bm_wls() -> OpenCVWLS:
-    return OpenCVWLS(base="bm", lambda_=4000.0, sigma_color=1.5, block_size=5)
+    return OpenCVWLS(base="bm", lambda_=8000.0, sigma_color=1.2, block_size=5)
 
 
 @register(

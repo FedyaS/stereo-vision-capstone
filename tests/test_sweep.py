@@ -122,25 +122,57 @@ def test_every_grid_names_real_parameters(grid_set):
             assert hasattr(algo, key), f"{name}: no parameter {key!r}"
 
 
-@pytest.mark.parametrize("grid_set", sorted(GRID_SETS))
-def test_every_grid_brackets_the_shipped_default(grid_set):
-    """Each grid should let the sweep move a parameter either way."""
-    for name, grid in GRID_SETS[grid_set].items():
-        spec = select([name])[0]
-        if not spec.availability()[0]:
-            continue
-        defaults = current_defaults(spec, grid.keys())
-        for key, values in grid.items():
-            if key not in defaults or not isinstance(defaults[key], (int, float)):
-                continue
-            d = defaults[key]
-            numeric = [v for v in values if isinstance(v, (int, float))]
-            if len(numeric) < 2:
-                continue
-            assert min(numeric) <= d <= max(numeric), (
-                f"{name}.{key}: default {d} lies outside the swept range "
-                f"{min(numeric)}..{max(numeric)}"
-            )
+# --------------------------------------------------------------------------
+# truncation diagnostic
+# --------------------------------------------------------------------------
+
+
+def test_boundary_hits_flags_min_max_and_ignores_interior():
+    """A winner on the edge of its range means the search was truncated."""
+    from bench.sweep_report import boundary_hits
+
+    grids = {"x": {"low": [1, 2, 3], "high": [1, 2, 3], "mid": [1, 2, 3]}}
+    cells = {
+        "x": [
+            SweepCell(algorithm="x", params={"low": 1, "high": 3, "mid": 2},
+                      bad2_all=5.0, wall_s=1.0),
+            SweepCell(algorithm="x", params={"low": 3, "high": 1, "mid": 1},
+                      bad2_all=9.0, wall_s=1.0),
+        ]
+    }
+    hits = {(h["parameter"], h["edge"]) for h in boundary_hits(cells, grids=grids)}
+    assert ("low", "min") in hits
+    assert ("high", "max") in hits
+    assert not [h for h in hits if h[0] == "mid"]
+
+
+def test_boundary_hits_ignores_categorical_parameters():
+    from bench.sweep_report import boundary_hits
+
+    grids = {"x": {"mode": ["a", "b", "c"]}}
+    cells = {"x": [SweepCell(algorithm="x", params={"mode": "a"},
+                             bad2_all=5.0, wall_s=1.0)]}
+    assert boundary_hits(cells, grids=grids) == []
+
+
+def test_boundary_hits_reports_the_known_truncations_of_round_two():
+    """The four winner-takes-all windows really did pin at the top.
+
+    Regression guard for the diagnostic that drove the extension sweep: if
+    this stops firing, `boundary_hits` has stopped seeing a real truncation.
+    """
+    from pathlib import Path
+
+    from bench.sweep import REFINED_GRIDS, load_sweep
+    from bench.sweep_report import boundary_hits
+
+    csv = Path(__file__).resolve().parents[1] / "results" / "sweeps" / "20261105-031423" / "sweep.csv"
+    if not csv.exists():
+        pytest.skip("round-two sweep results not present")
+
+    hits = boundary_hits(load_sweep(csv), grids=REFINED_GRIDS)
+    pinned = {h["algorithm"] for h in hits if h["parameter"] == "block" and h["edge"] == "max"}
+    assert {"scratch_census_wta", "scratch_sad_wta", "scratch_ssd_wta"} <= pinned
 
 
 # --------------------------------------------------------------------------
@@ -230,6 +262,31 @@ def test_best_config_ignores_timing_noise():
 def test_best_config_still_prefers_a_real_speedup():
     cells = [_cell(21.21, 1.00), _cell(21.29, 0.20)]
     assert best_config(cells, tolerance_pp=0.5).bad2_all == 21.29
+
+
+def test_best_config_rejects_a_trivial_speedup():
+    """0.4 points is not worth 1.11x, which is inside measurement noise.
+
+    This is the case the accuracy-anchored rule exists for. The previous
+    rule -- near-ties, then everything within 5% of the fastest, then the
+    most accurate of those -- excluded the better configuration from the
+    tier entirely and returned the worse one.
+    """
+    cells = [_cell(10.0, 1.00), _cell(10.4, 0.90)]
+    assert best_config(cells, tolerance_pp=0.5).bad2_all == 10.0
+
+
+def test_best_config_cannot_repair_an_implausible_timing():
+    """Documents a real limit: a wrong measurement still wins.
+
+    These are `torch_zncc_wta`'s actual round-two rows. The 17 px window
+    measured 1.39x faster than the 13 px one, which a larger box filter
+    cannot be, and the rule takes the trade because 1.39x clears the bar.
+    Guarding this is the job of `test_torch_defaults_mirror_scratch`, which
+    copies the NumPy side's parameters over, not of the selection rule.
+    """
+    cells = [_cell(21.21, 1.488), _cell(21.29, 1.649), _cell(21.67, 1.069)]
+    assert best_config(cells, tolerance_pp=0.5).bad2_all == 21.67
 
 
 def test_best_config_tolerance_is_respected():
@@ -421,22 +478,64 @@ def test_recommended_changes_empty_when_default_wins():
     assert recommended_changes({"scratch_sad_wta": cells}) == []
 
 
+#: torch entries copy their parameters from the matching scratch entry rather
+#: than from their own sweep rows, so their defaults are not expected to appear
+#: in any grid. `test_torch_defaults_mirror_scratch` is what guards them.
+MIRRORED_FROM_SCRATCH = {
+    "torch_sad_wta",
+    "torch_zncc_wta",
+    "torch_census_sgm4",
+}
+
+
+def _searched_values(name, key):
+    """Every value of `name.key` that any grid set actually swept."""
+    seen = []
+    for grid_set in GRID_SETS.values():
+        for v in (grid_set.get(name) or {}).get(key, []):
+            if v not in seen:
+                seen.append(v)
+    return seen
+
+
+def test_every_shipped_default_was_actually_searched():
+    """Each default must come from a sweep, or be a declared mirror.
+
+    The grid sets are a historical record -- `default` is round one,
+    `refined` round two, `wta-extended` the pass that found where the
+    window turns over -- so a default can legitimately sit outside any
+    single one of them. What must hold is that it appears in at least one
+    grid that was run, otherwise "these defaults came from a sweep" is not
+    true of that parameter.
+    """
+    missing = []
+    for name in sorted({n for gs in GRID_SETS.values() for n in gs}):
+        if name in MIRRORED_FROM_SCRATCH:
+            continue
+        spec = select([name])[0]
+        if not spec.availability()[0]:
+            continue
+        keys = {k for gs in GRID_SETS.values() for k in (gs.get(name) or {})}
+        for key, value in current_defaults(spec, keys).items():
+            searched = _searched_values(name, key)
+            if searched and value not in searched:
+                missing.append(f"{name}.{key}={value!r} not in {searched!r}")
+    assert not missing, "defaults never swept:\n  " + "\n  ".join(missing)
+
+
 @pytest.mark.parametrize("grid_set", sorted(GRID_SETS))
-def test_every_grid_contains_the_shipped_default(grid_set):
-    """Otherwise the summary cannot say what tuning actually bought."""
+def test_grids_are_internally_consistent(grid_set):
+    """A grid must name real parameters and offer a choice worth making."""
     for name, grid in GRID_SETS[grid_set].items():
         spec = select([name])[0]
         if not spec.availability()[0]:
             continue
-        defaults = current_defaults(spec, grid.keys())
+        algo = spec.build()
         for key, values in grid.items():
-            if key not in defaults:
-                continue
-            assert defaults[key] in values, (
-                f"{name}.{key}: shipped default {defaults[key]!r} is not in "
-                f"the swept values {values!r}, so there is nothing to compare "
-                "the best configuration against"
-            )
+            assert hasattr(algo, key), f"{grid_set}/{name}: no parameter {key!r}"
+            assert len(values) == len(
+                [v for i, v in enumerate(values) if v not in values[:i]]
+            ), f"{grid_set}/{name}.{key} repeats a value"
 
 
 # --------------------------------------------------------------------------
@@ -487,3 +586,38 @@ def test_baseline_round_trips_tuple_parameters(tmp_path):
         {"baseline_defaults": {"scratch_census_wta": {"census_win": "(7, 9)"}}}
     ))
     assert load_baseline(path)["scratch_census_wta"]["census_win"] == (7, 9)
+
+
+def test_baseline_restores_tuples_written_as_json_arrays(tmp_path):
+    """json.dumps turns a tuple into an array, so it must come back a tuple.
+
+    Without this the recorded default never compares equal to the matching
+    sweep cell's params, the "pre-sweep" column goes blank and the gain is
+    reported as nan -- which is exactly what `scratch_census_wta` did.
+    """
+    import json
+
+    from bench.sweep import load_baseline
+
+    path = tmp_path / "sweep.json"
+    path.write_text(json.dumps(
+        {"baseline_defaults": {"scratch_census_wta": {"census_win": (7, 7)}}}
+    ))
+    assert load_baseline(path)["scratch_census_wta"]["census_win"] == (7, 7)
+
+
+def test_baseline_tuple_survives_a_real_sweep(tiny_pair, tmp_path, monkeypatch):
+    """End to end: a tuple-valued default must produce a real gain number."""
+    from bench.sweep import load_baseline
+    from bench.sweep_report import summarise
+
+    monkeypatch.setitem(
+        GRIDS, "scratch_census_wta",
+        {"census_win": [(5, 5), (7, 7), (7, 9)]},
+    )
+    all_cells, out_dir = run_sweeps(
+        ["scratch_census_wta"], [tiny_pair], tmp_path / "s", verbose=False
+    )
+    baseline = load_baseline(out_dir / "sweep.json")
+    row = summarise(all_cells, baseline=baseline)[0]
+    assert not np.isnan(row["default_bad2"]), "shipped default was not matched"

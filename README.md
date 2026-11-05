@@ -191,12 +191,23 @@ were worse. `python -m bench sweep` answers that:
 python -m bench sweep
 ```
 
-765 configurations across 21 algorithms, ~20 minutes. Output in
-`results/sweeps/<timestamp>/`: `sweep_summary.md` (pre-sweep vs tuned, the
-recommended diff, top configs), `sweep.csv`, and a parameter-response figure
-per algorithm.
+```bash
+python -m bench sweep --grid refined
+```
 
-Two rules keep it from being self-congratulatory.
+Three passes were run, all on the tune split only:
+
+| pass | grid set | configs | what it was for |
+|---|---|---|---|
+| 1 | `default` | 765 | coarse search around the shipped defaults |
+| 2 | `refined` | 1068 | extend past round one's truncated ranges, bisect elsewhere |
+| 3 | `wta-extended` | 20 | push the block-matching window until it turned over |
+
+Output lands in `results/sweeps/<timestamp>/`: `sweep_summary.md` (pre-sweep
+vs tuned, the recommended diff, truncated searches, top configs),
+`sweep.csv`, and a parameter-response figure per algorithm.
+
+### What keeps it honest
 
 **The sweep only sees half the scenes.** `bench/splits.py` splits the 15
 scenes into 7 `tune` and 8 `heldout`, **by scene rather than by file**:
@@ -206,66 +217,119 @@ the *same geometry*, so splitting those apart would leak. Both sides keep a
 photometrically awkward pair so the held-out set can still test the
 cost-function finding.
 
+**Held-out is reported, never acted on.** Selection happens on `tune` in all
+three passes. Reverting a change because held-out disliked it would be
+selection on held-out, and would forfeit exactly the property that makes it
+worth measuring. So the regressions below are reported and kept, not quietly
+undone.
+
 **Accuracy first, speed only when it is real.** The rule takes the lowest
-`bad2_all`, keeps everything within 0.5 points of it, keeps those within 5% of
-the fastest, and takes the most accurate of *those*. The 5% band matters: the
-first version sorted near-ties by raw wall time and picked the worse of two
-block sizes whose runtimes differed by 3 ms of jitter.
+`bad2_all`, then moves to a configuration within 0.5 points of it only if that
+one is at least 1.3x faster. An earlier version worked the other way round --
+near-ties first, then everything within 5% of the *fastest*, then the most
+accurate of those -- which let one quick measurement define the tier and hand
+back 0.4 points for a 1.11x "speedup" inside measurement noise.
+
+That fix has a documented limit, which is worth stating because it bit:
+`torch_zncc_wta` measured a 17 px box filter 1.39x *faster* than a 13 px one,
+which cannot be true, and both the old and the new rule take that trade. A
+selection rule cannot repair a wrong measurement. What protects the result is
+distrusting it -- the `torch_*` entries copy their parameters from the
+matching `scratch_*` entry rather than using their own sweep rows, enforced by
+`test_torch_defaults_mirror_scratch`.
+
+**Truncated searches are flagged, not reported as results.**
+`boundary_hits()` lists every parameter whose winner landed on the edge of its
+range, which means the grid ran out before the response did. Round one had 33
+of them -- that diagnostic is what round two was built from, and it is why the
+block-matching window got a third pass of its own.
 
 ### Did it generalise?
 
-| | tune (7 scenes, seen) | held-out (8 scenes, unseen) |
+| | tune (7 scenes, seen) | held-out (8 scenes, unseen) | ratio |
+|---|---|---|---|
+| round 1 over untuned | +1.42 pp | **+1.45 pp** | 1.02 |
+| round 2 over round 1 | +1.06 pp | **+0.26 pp** | 0.25 |
+| cumulative | +2.52 pp | **+1.83 pp** | 0.73 |
+
+**This is the most useful result in the whole exercise.** The first pass
+generalised completely -- the held-out gain even edged past the tune gain, and
+21 of 21 tunable algorithms improved on scenes the sweep had never seen. The
+second pass did not: it found another 1.06 points on the tune scenes and kept
+only a quarter of them, with 10 of 19 algorithms actually *regressing* on
+held-out.
+
+Nothing changed between the passes except how finely the same 7 scenes were
+searched. That is diminishing returns turning into overfitting, visible only
+because the held-out half was never touched. A sweep reporting tune numbers
+alone would have called round two a 1.06-point win.
+
+Where round two did hold up: `scratch_sad_wta_lrcheck` +3.42 held-out,
+`opencv_sgbm_hh` +1.50, `opencv_sgbm_wls` +1.19, `opencv_bm` +1.69. Where it
+did not: every entry whose matching window grew (`scratch_ssd_wta` -2.16,
+`scratch_census_wta` -0.73, `scratch_sad_wta` -0.66).
+
+The shipped defaults are round two's, per the protocol above. Cumulatively
+they are still clearly better than untuned (+1.83 held-out, 19 of 21
+improving) -- just not by as much as the tune column claims.
+
+### Two things the sweep revealed about the metric
+
+**The window wants to be enormous, and `bad2_all` is why.** Round one moved
+the winner-takes-all window from 9 px to 13-15, round two to 25, and the
+extension pass found it finally turning over at 21-29 px -- on a 450 px-wide
+image. Splitting the evaluation region explains it exactly. For
+`scratch_sad_wta` over four tune scenes, going from a 9 px to a 29 px window:
+
+| region | share of pixels | change in bad 2.0 |
 |---|---|---|
-| mean gain | **+1.42 pp** | **+1.45 pp** |
+| near a depth discontinuity (±9 px) | 30% | **7.97 pp worse** |
+| away from one | 70% | **6.27 pp better** |
+| overall | 100% | 2.01 pp better |
 
-The held-out gain matches the tune gain, so the grid found real settings
-rather than scene-specific ones. 21 of 21 tuned algorithms improved on
-held-out data; the two untuned ones are the ONNX exports, which have no
-parameters to move.
+0.70 x 6.27 - 0.30 x 7.97 = +2.0, the whole of the overall gain. The window
+buys flat regions and pays for it at every depth edge, and since the metric
+counts all pixels equally it books that as an improvement. The held-out
+regressions above suggest the trade does not even transfer between scenes.
 
-Biggest held-out gains: `scratch_sad_wta_lrcheck` +4.33, `scratch_sad_wta`
-+3.54, `opencv_sgbm_wls` +2.80, `opencv_quasi_dense` +2.65,
-`opencv_bm` +2.59, `scratch_census_wta` +2.57.
-
-One clean pattern came out of it. **Winner-takes-all methods wanted much
-larger windows than the conventional 9x9** -- 13 to 15 px, worth 3-4 points --
-while the **aggregating methods wanted small ones** (3 to 5 px). Without an
-aggregation step the only thing suppressing an ambiguous match is window
-support, so more is better; once SGM supplies that support globally, a large
-window only blurs depth edges. The SGBM sweep also moved OpenCV's documented
-`P1`/`P2` recommendation from 8/32 to 4/64: a wider ratio holds a surface
-together through texture while still paying heavily for a true depth jump.
-
-The ranking barely moved, which is the reassuring outcome -- the conclusions
-below were not an artifact of untuned baselines.
+**The sweep switched the quality filters off.** Every SGBM mode and
+`scratch_sad_wta_lrcheck` chose `uniqueness_ratio = 0`, and StereoBM also went
+to `texture_threshold = 0` and QuasiDenseStereo to its loosest correlation
+threshold. Those parameters exist to let a matcher *abstain* when the match is
+ambiguous -- and under `bad2_all` an unanswered pixel scores exactly as badly
+as a wrong one, so abstaining is never worth anything. The metric rewards
+guessing. Read `bad2_valid` and `density` alongside it before copying any of
+these defaults into an application where a confident wrong depth is worse than
+no depth.
 
 ---
 
 ## Results
 
 All 15 scenes x 23 algorithms = 345 cells, no failures, on an i9-13900HX
-(24 physical cores, no CUDA), with tuned defaults. Full output in
-`results/20261105-023941/`. Reproduce with `python -m bench run`.
+(24 physical cores, no CUDA), with round-2 defaults. Full output in
+`results/20261105-035941/`. Reproduce with `python -m bench run`.
 
 | rank | algorithm | bad2_all | wall_s | cpu_s | cores busy |
 |---|---|---|---|---|---|
-| 1 | `learned_raft_stereo_r4` | 10.51% | 1.90 | 45.6 | 24.1 |
-| 2 | `scratch_census_sgm8` | 12.12% | 3.13 | 3.1 | 1.0 |
-| 3 | `torch_census_sgm4` | 12.29% | 4.38 | 103.5 | 23.7 |
-| 4 | `scratch_census_sgm4` | 12.32% | 1.83 | 1.9 | 1.0 |
-| 6 | `scratch_census_dp` | 16.34% | 1.05 | 1.1 | 1.1 |
-| 8 | `opencv_sgbm_hh4` | 23.31% | 0.04 | 0.1 | 2.8 |
-| 9 | `opencv_sgbm_3way` | 23.50% | 0.02 | 0.0 | 2.4 |
+| 1 | `learned_raft_stereo_r4` | 10.51% | 4.43 | 62.0 | 14.4 |
+| 2 | `torch_census_sgm4` | 12.34% | 6.26 | 71.1 | 11.9 |
+| 3 | `scratch_census_sgm4` | 12.37% | 4.80 | 4.9 | 1.0 |
+| 4 | `scratch_census_sgm8` | 12.42% | 10.01 | 9.6 | 1.0 |
+| 6 | `scratch_census_dp` | 15.63% | 2.57 | 2.8 | 1.1 |
+| 7 | `scratch_census_wta` | 17.34% | 1.45 | 1.4 | 1.0 |
+| 8 | `opencv_sgbm_wls` | 22.66% | 0.10 | 0.4 | 3.6 |
+| 11 | `opencv_sgbm_3way` | 22.98% | 0.04 | 0.1 | 3.8 |
 
 Pareto frontier: `opencv_bm` -> `opencv_sgbm_3way` -> `opencv_sgbm_hh4` ->
-`scratch_census_wta` -> `scratch_census_dp` -> `scratch_census_sgm4` ->
+`opencv_sgbm_wls` -> `scratch_census_wta` -> `scratch_census_dp` ->
 `learned_raft_stereo_r4`.
 
 Four things this says:
 
 **The matching cost matters more than the aggregation.** Same
 winner-takes-all pipeline, each at its own tuned window, only the cost
-function changed: census 17.6%, ZNCC 23.9%, SSD 35.5%, SAD 36.4%. Swapping SAD
+function changed: census 17.3%, ZNCC 23.9%, SAD 35.8%, SSD 36.0%. Swapping SAD
 for census buys more than adding 8-path semi-global aggregation to SAD does
 (`scratch_sad_sgm8`, 29.6%).
 
@@ -275,49 +339,56 @@ cost has no defence:
 
 | scene | census | ZNCC | SAD |
 |---|---|---|---|
-| MotorcycleE | **5.9%** | 12.3% | 70.9% |
-| ArtL | **13.5%** | 28.1% | 54.7% |
-| PianoL | **32.3%** | 40.9% | 73.2% |
-| Motorcycle (normal exposure) | **6.4%** | 13.2% | 17.3% |
+| MotorcycleE | **6.5%** | 12.3% | 60.9% |
+| ArtL | **15.6%** | 28.1% | 47.7% |
+| PianoL | **27.7%** | 40.9% | 68.1% |
+| Motorcycle (normal exposure) | **6.9%** | 13.2% | 17.0% |
 
 Census keeps only the *ordering* of neighbouring pixels, so a gain-and-offset
 change leaves it untouched. This is the clearest result in the run, and it is
 visible precisely because the dataset includes scenes built to expose it.
 
 **A from-scratch SGM lands within 2 points of a pretrained network.**
-`scratch_census_sgm8` at 12.12% against RAFT-Stereo's 10.51% -- roughly 300
+`scratch_census_sgm4` at 12.37% against RAFT-Stereo's 10.51% -- roughly 300
 lines of NumPy against a trained model, though the ONNX export is being
 applied out of domain and at a resampled resolution, so this is not
 RAFT-Stereo at its best.
 
 **Wall time hides what compute is being spent.** `torch_census_sgm4` and
 `scratch_census_sgm4` compute the same thing to within 0.03 points, from
-identical parameters -- but torch burns **103 CPU-seconds to NumPy's 1.9**,
-keeping 24 cores busy to end up *slower* in wall time (4.38s vs 1.83s). The
+mirrored parameters -- but torch burns **71 CPU-seconds to NumPy's 4.9**,
+keeping 12 cores busy to end up *slower* in wall time (6.26s vs 4.80s). The
 tensor formulation is written for a GPU this machine does not have. Wall time
-alone would have called these close; CPU-seconds show one of them costing 55x
+alone would have called these close; CPU-seconds show one of them costing 14x
 the compute.
 
 **And the classical library is still two orders of magnitude faster.**
-`opencv_sgbm_3way` is 23.5% bad2 in 0.017s. Getting to 10.5% costs ~110x the
-wall time and ~1000x the CPU time. Which end of that trade is right depends
+`opencv_sgbm_3way` is 23.0% bad2 in 0.039s. Getting to 10.5% costs ~110x the
+wall time and ~440x the CPU time. Which end of that trade is right depends
 entirely on the application.
 
-Hardest scenes, averaged over all 23 algorithms: `PianoL` 46.6%, `Shelves`
-37.3%, `Jadeplant` 35.2%. Easiest: `Teddy` 14.5%, `Motorcycle` 14.7%.
+Hardest scenes, averaged over all 23 algorithms: `PianoL` 44.8%, `Jadeplant`
+36.4%, `Shelves` 35.9%. Easiest: `Motorcycle` 14.5%, `Teddy` 14.9%.
 
 ### A caveat on the timings
 
-The pre-tuning run (`results/20261105-013249/`) and the tuned one are **not
-comparable on time**, only on accuracy. Nearly every algorithm appears ~2.5x
-faster in the later run, including the two ONNX models whose parameters never
-changed (2.10x and 2.70x, bracketing the 2.47x median across all 23). Running
-both parameter sets back to back confirms it: `scratch_census_sgm8` takes
-1.655s with the old values and 1.636s with the new ones. The difference is
-machine state across a 27-minute sustained load on a laptop, not the sweep.
+The three full runs are comparable on accuracy but **not on time**. The two
+ONNX models have never had a parameter changed, and their wall time still
+moved like this:
 
-Both runs used `--repeats 1`. For any timing claim, use `--repeats 5` or more
-and keep the machine otherwise idle; accuracy is deterministic and unaffected.
+| | untuned run | round-1 run | round-2 run |
+|---|---|---|---|
+| `learned_raft_stereo_r4` | 3.99s | 1.90s | 4.43s |
+| `learned_raft_stereo_r1` | 0.91s | 0.34s | 0.93s |
+
+A 2.3x spread on identical work. Running two parameter sets back to back
+confirms the same thing from the other direction:
+`scratch_census_sgm8` took 1.655s with its old values and 1.636s with its new
+ones in the same session. The differences between runs are machine state over
+a ~25-minute sustained load on a laptop, not the sweep.
+
+All three runs used `--repeats 1`. For any timing claim use `--repeats 5` or
+more on an otherwise idle machine; accuracy is deterministic and unaffected.
 
 ---
 
@@ -347,7 +418,9 @@ bench/
 scripts/
   get_dataset.py        download Middlebury MiddEval3 (quarter resolution)
   get_models.py         download the ONNX weights
-tests/                  193 tests
+app/                    interactive explorer (own README) -- see app/README.md
+tests/                  pytest suite: metrics, dataset loaders, per-algorithm
+                        contract tests, the sweep machinery and the app
 practice/               the original hand-written notebook and its image pair
 ```
 
@@ -409,14 +482,29 @@ it properly.
   the best each could do. Those configurations come from `python -m bench
   sweep` on the tune split; see the Tuning section and the comments on each
   adapter's dataclass defaults.
+- **The defaults are tuned for `bad2_all`, and it shows.** The sweep turned
+  every uniqueness and texture test off and grew the matching window far past
+  what a depth map should use, because an unanswered pixel and a wrong one
+  score identically and edges are only ~30% of the image. They are the right
+  defaults for this benchmark and the wrong ones for an application that would
+  rather have a hole than a confident mistake -- retune against `bad2_valid`
+  and `density` for that.
+- **Round two of the sweep overfit.** The second, finer pass over the same 7
+  tune scenes found +1.06 points there and kept +0.26 on held-out, with 10 of
+  19 algorithms regressing. Held-out is reported, never used to revert a
+  change, so those regressions are still in the shipped defaults; the
+  cumulative held-out gain over untuned is +1.83. Treat a third pass over the
+  same split as very unlikely to be worth running.
 - **The two torch/NumPy pairs must stay in step.** `torch_*` entries exist to
   isolate the backend, which only means anything if both run the same
   configuration, so their tuned values are copied from the `scratch_*` side
   rather than searched independently (`test_torch_defaults_mirror_scratch`
   enforces it). Their sweep grids are confirmatory only.
-- **Timings need `--repeats`.** The headline runs used `--repeats 1`, which is
-  fine for accuracy but not for time: see the caveat under Results, where a
-  whole run drifted ~2.5x on machine state alone.
+- **Timings need `--repeats`.** All three full runs used `--repeats 1`, which
+  is fine for accuracy but not for time: see the caveat under Results, where
+  the two untuned ONNX models drifted 2.3x across runs on machine state alone.
+  The same noise reached the sweep's selection rule once, which is why it now
+  demands a 1.3x speedup before trading any accuracy away.
 - **Cost-volume memory** is `D x H x W` float32 -- about 210 MB for the widest
   scene at `ndisp=160`. `--max-volume-gb` skips a cell rather than letting the
   machine swap, and the skip is recorded in the summary.

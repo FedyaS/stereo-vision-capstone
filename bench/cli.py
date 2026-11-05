@@ -254,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--limit", type=int, default=None,
                     help="use at most this many scenes")
     ps.add_argument(
-        "--grid", choices=("default", "refined"), default="default",
+        "--grid", choices=("default", "refined", "wta-extended"), default="default",
         help="which grid set to sweep. 'refined' is the coarse-to-fine second "
         "pass: it extends past the ranges the first sweep bottomed or topped "
         "out on, and bisects around the ones it landed inside.",

@@ -245,10 +245,32 @@ REFINED_GRIDS: dict[str, dict[str, list]] = {
     "torch_census_sgm4": {"block": [5, 7]},
 }
 
+# --------------------------------------------------------------------------
+# round three: how far does the window actually want to go?
+# --------------------------------------------------------------------------
+# Round two left four winner-takes-all entries still pinned at the top of
+# their block range, so the honest answer was "we do not know where this turns
+# over". These grids push the window out to 41 px on a ~450 px-wide image to
+# find the actual maximum, rather than reporting a boundary hit as if it were
+# a result.
+EXTENDED_WTA_GRIDS: dict[str, dict[str, list]] = {
+    "scratch_sad_wta": {"block": [25, 29, 33, 37, 41]},
+    "scratch_ssd_wta": {"block": [25, 29, 33, 37, 41]},
+    "scratch_census_wta": {
+        "block": [17, 21, 25, 29, 33],
+        "census_win": [(7, 9)],
+    },
+    "scratch_sad_wta_lrcheck": {
+        "block": [17, 21, 25, 29, 33],
+        "uniqueness_ratio": [0.0],
+    },
+}
+
 #: Selectable grid sets, by the name `--grid` takes.
 GRID_SETS: dict[str, dict[str, dict[str, list]]] = {
     "default": GRIDS,
     "refined": REFINED_GRIDS,
+    "wta-extended": EXTENDED_WTA_GRIDS,
 }
 
 
@@ -416,40 +438,51 @@ def sweep_algorithm(
 def best_config(
     cells: Sequence[SweepCell],
     tolerance_pp: float = 0.5,
-    speed_margin: float = 1.05,
+    min_speedup: float = 1.3,
 ) -> SweepCell | None:
-    """Lowest ``bad2_all``, trading accuracy for speed only when speed differs.
+    """The most accurate configuration, unless a near-tie is *much* faster.
 
-    Three steps:
+    Anchored on accuracy:
 
-    1. Take every configuration within ``tolerance_pp`` percentage points of
-       the best ``bad2_all``. Half a point is well inside the scene-to-scene
-       spread, so it is worth trading for a real speedup.
-    2. Of those, keep the ones within ``speed_margin`` of the fastest.
-    3. Among *those*, take the most accurate.
+    1. Take the lowest ``bad2_all``; call it the anchor.
+    2. Look for configurations within ``tolerance_pp`` percentage points of
+       the anchor that are also at least ``min_speedup`` times faster.
+    3. If any exist, take the fastest. Otherwise keep the anchor.
 
-    Step 2 is what stops the rule from chasing timing noise. Sorting the
-    near-ties by raw wall time picks whichever run happened to land a few
-    milliseconds quicker, which for a block-size sweep -- where the window
-    size barely changes the cost of a box filter -- is pure jitter and
-    silently gives up real accuracy for it.
+    The anchoring matters. An earlier version worked the other way round --
+    take the near-ties, keep those within 5% of the *fastest*, then pick the
+    most accurate of those. That let one quick measurement define the tier and
+    exclude the genuinely best configuration from it, so the rule would hand
+    back 0.4 points of accuracy for a 1.11x speedup that is inside measurement
+    noise. Anchoring on accuracy and demanding a *ratio* fixes exactly that
+    case: the anchor is always in the running, and leaving it has a price.
+
+    What this does **not** fix is a timing that is simply wrong. Given a
+    1.39x "speedup" from a larger box filter -- which cannot really be faster
+    -- both the old rule and this one take it. Sweeps run at ``--repeats 1``,
+    so a speed-driven pick on a multithreaded backend stays suspect; that is
+    handled by distrusting the measurement, not by the selection rule, which
+    is why the ``torch_*`` entries copy their parameters from the matching
+    ``scratch_*`` entry rather than using their own sweep rows.
     """
     ok = [c for c in cells if c.status == "ok" and np.isfinite(c.bad2_all)]
     if not ok:
         return None
-    floor = min(c.bad2_all for c in ok)
-    near = [c for c in ok if c.bad2_all <= floor + tolerance_pp]
 
-    walls = [c.wall_s for c in near if np.isfinite(c.wall_s) and c.wall_s > 0]
-    if walls:
-        fastest = min(walls)
-        tier = [
-            c
-            for c in near
-            if not np.isfinite(c.wall_s) or c.wall_s <= fastest * speed_margin
-        ]
-        near = tier or near
-    return min(near, key=lambda c: c.bad2_all)
+    anchor = min(ok, key=lambda c: c.bad2_all)
+    if not np.isfinite(anchor.wall_s) or anchor.wall_s <= 0:
+        return anchor
+
+    faster = [
+        c
+        for c in ok
+        if c is not anchor
+        and c.bad2_all <= anchor.bad2_all + tolerance_pp
+        and np.isfinite(c.wall_s)
+        and c.wall_s > 0
+        and anchor.wall_s / c.wall_s >= min_speedup
+    ]
+    return min(faster, key=lambda c: c.wall_s) if faster else anchor
 
 
 def current_defaults(spec: AlgorithmSpec, keys: Iterable[str]) -> dict[str, Any]:
@@ -590,7 +623,15 @@ def load_baseline(sweep_json: Path | str) -> dict[str, dict[str, Any]]:
     for name, params in (data.get("baseline_defaults") or {}).items():
         clean: dict[str, Any] = {}
         for k, v in params.items():
-            if isinstance(v, str) and v.startswith("("):
+            # A tuple parameter such as `census_win` can come back either way:
+            # as a JSON array, because json.dumps turns a tuple into one, or
+            # as the string "(7, 9)" from an older run whose values went
+            # through `default=str`. Both have to become a tuple again or the
+            # equality test against a sweep cell's params silently fails and
+            # the before/after gain reports as nan.
+            if isinstance(v, list):
+                v = tuple(v)
+            elif isinstance(v, str) and v.startswith("("):
                 try:
                     v = ast.literal_eval(v)
                 except (ValueError, SyntaxError):

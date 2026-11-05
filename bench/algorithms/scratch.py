@@ -532,13 +532,22 @@ def _entry(name: str, blurb: str, tags: tuple[str, ...], **kw):
     return _build
 
 
-# Block sizes, penalties and windows below come from the sweep in
-# `bench/sweep.py`, run on the tune split only (results/sweeps/). The single
-# clearest pattern: every winner-takes-all variant wanted a *larger* window
-# than the conventional 9x9 -- without an aggregation step the only thing
-# suppressing ambiguous matches is window support, so 13-15 px wins by 3-4
-# points. The aggregating variants want the opposite, a small window, because
-# SGM supplies that support globally and a large window only blurs edges.
+# Block sizes, penalties and windows below come from two sweep rounds in
+# `bench/sweep.py`, run on the tune split only (results/sweeps/), plus one
+# extension sweep that pushed the window out until the response turned over.
+#
+# The winner-takes-all variants want a very large window -- 21 to 33 px on a
+# ~450 px-wide image, not the conventional 9x9. Without an aggregation step
+# the only thing suppressing an ambiguous match is window support, so more
+# of it keeps helping long after the result stops looking like a depth map.
+# Measured on four tune scenes, going from a 9 px to a 29 px window on
+# `scratch_sad_wta` costs 7.97 points *near depth discontinuities* and gains
+# 6.27 points away from them; edges are 30% of the evaluated pixels, so the
+# net is +2.0 points and `bad2_all` calls it an improvement. Read those
+# defaults as what the metric rewards, not as what looks right.
+#
+# The aggregating variants want the opposite, a small window, because SGM
+# supplies that support globally and a large window only blurs edges.
 
 # --- winner-takes-all over four different matching costs -------------------
 _entry(
@@ -546,14 +555,14 @@ _entry(
     "SAD cost volume, box aggregation, winner-takes-all + sub-pixel",
     ("local", "wta", "sad"),
     metric="sad",
-    block=15,
+    block=29,
 )
 _entry(
     "scratch_ssd_wta",
     "SSD cost volume, box aggregation, winner-takes-all",
     ("local", "wta", "ssd"),
     metric="ssd",
-    block=15,
+    block=25,
 )
 _entry(
     "scratch_zncc_wta",
@@ -567,8 +576,8 @@ _entry(
     "Census transform + Hamming cost, winner-takes-all",
     ("local", "wta", "census", "photometric-invariant"),
     metric="census",
-    block=11,
-    census_win=(7, 7),
+    block=21,
+    census_win=(7, 9),
 )
 
 # --- the same cost with increasing amounts of global reasoning -------------
@@ -577,8 +586,8 @@ _entry(
     "SAD + winner-takes-all + uniqueness test + left-right consistency",
     ("local", "wta", "sad", "validated"),
     metric="sad",
-    block=11,
-    uniqueness_ratio=0.05,
+    block=33,
+    uniqueness_ratio=0.0,
     lr_check=True,
 )
 _entry(
@@ -586,16 +595,16 @@ _entry(
     "Census cost, exact per-scanline Viterbi under a Potts prior",
     ("global", "dp", "census"),
     metric="census",
-    block=5,
+    block=9,
     aggregation="dp",
-    jump_penalty=90.0,
+    jump_penalty=60.0,
 )
 _entry(
     "scratch_census_sgm4",
     "Census cost, semi-global aggregation over 4 paths",
     ("global", "sgm", "census"),
     metric="census",
-    block=5,
+    block=7,
     aggregation="sgm4",
     p1=20.0,
 )
@@ -604,18 +613,20 @@ _entry(
     "Census cost, semi-global aggregation over 8 paths",
     ("global", "sgm", "census", "accurate"),
     metric="census",
-    block=3,
+    block=7,
     aggregation="sgm8",
     p1=20.0,
+    p2=90.0,
 )
 _entry(
     "scratch_census_sgm8_lrcheck",
     "Census + 8-path SGM + left-right consistency (trades density for precision)",
     ("global", "sgm", "census", "accurate", "validated"),
     metric="census",
-    block=3,
+    block=5,
     aggregation="sgm8",
     p1=20.0,
+    p2=90.0,
     lr_check=True,
 )
 _entry(
@@ -623,6 +634,6 @@ _entry(
     "SAD cost, semi-global aggregation over 8 paths",
     ("global", "sgm", "sad"),
     metric="sad",
-    block=5,
+    block=7,
     aggregation="sgm8",
 )

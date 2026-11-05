@@ -281,7 +281,7 @@ _entry(
     "SAD cost volume + winner-takes-all, as tensor ops (GPU if available)",
     ("local", "wta", "sad", "gpu-capable"),
     metric="sad",
-    block=15,
+    block=29,
 )
 _entry(
     "torch_zncc_wta",
@@ -295,7 +295,7 @@ _entry(
     "Census cost + 4-path SGM, as tensor ops (GPU if available)",
     ("global", "sgm", "census", "gpu-capable"),
     metric="census",
-    block=5,
+    block=7,
     aggregation="sgm4",
     p1=20.0,
 )
