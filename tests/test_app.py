@@ -285,6 +285,39 @@ def test_unknown_run_is_404(client):
     assert client.get("/api/runs/not-a-run").status_code == 404
 
 
+def test_run_report_is_generated_and_cached(client):
+    runs = client.get("/api/runs").json()
+    if not runs:
+        pytest.skip("no stored runs")
+    run_id = runs[0]["id"]
+    r = client.get(f"/api/runs/{run_id}/report")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/html")
+    assert r.text.startswith("<!doctype html>")
+    # Written into the run folder, so the second request is a file read.
+    from app.server.main import RESULTS_ROOT
+
+    assert (RESULTS_ROOT / run_id / "report.html").exists()
+    again = client.get(f"/api/runs/{run_id}/report")
+    assert again.status_code == 200 and again.text == r.text
+
+
+def test_run_report_of_unknown_run_is_404(client):
+    assert client.get("/api/runs/not-a-run/report").status_code == 404
+
+
+def test_run_report_rejects_an_unknown_format(client):
+    runs = client.get("/api/runs").json()
+    if not runs:
+        pytest.skip("no stored runs")
+    r = client.get(f"/api/runs/{runs[0]['id']}/report", params={"format": "docx"})
+    assert r.status_code == 422
+
+
+def test_run_report_path_traversal_is_blocked(client):
+    assert client.get("/api/runs/..%2F..%2Fetc/report").status_code in (404, 400)
+
+
 def test_run_figure_path_traversal_is_blocked(client):
     runs = client.get("/api/runs").json()
     if not runs:

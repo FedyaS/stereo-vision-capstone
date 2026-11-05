@@ -95,3 +95,13 @@ export function runFigureUrl(runId: string, name: string) {
     encodeURIComponent(name)
   }`
 }
+
+/** The narrative report for a run. Opened in a new tab rather than fetched:
+ *  it is a whole self-contained document, not data for this UI to render. */
+export function runReportUrl(
+  runId: string, format: 'html' | 'pdf' = 'html', refresh = false,
+) {
+  return `${BASE}/runs/${encodeURIComponent(runId)}/report?format=${format}${
+    refresh ? '&refresh=1' : ''
+  }`
+}

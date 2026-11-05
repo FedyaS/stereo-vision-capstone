@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, runFigureUrl } from '../api'
+import { api, runFigureUrl, runReportUrl } from '../api'
 import { FamilyDot, fmt, usePoll } from '../components'
+import TradeoffChart from '../TradeoffChart'
 import type { Algorithm, Job, RunDetail, RunRow, RunSummary, Scene } from '../types'
 
 type SortKey = string
@@ -109,6 +110,16 @@ export default function Runs({
       setError(e instanceof Error ? e.message : String(e))
     }
   }
+
+  /* The accuracy/time PNG is still written to the run folder, but the
+     explorer below supersedes it in the UI -- showing both invites the
+     question of which one is current. Per-pixel figures stay as images. */
+  const stillFigures = useMemo(
+    () => figures.filter(
+      (f) => !f.includes('__') && f !== 'accuracy_vs_time.png',
+    ),
+    [figures],
+  )
 
   const cols: [string, string][] = [
     ['algorithm', 'algorithm'], ['bad2_all', 'bad 2px'], ['bad1_all', 'bad 1px'],
@@ -280,6 +291,26 @@ export default function Runs({
         {detail && (
           <>
             <div className="card">
+              <div className="row-between" style={{ marginBottom: 10 }}>
+                <h3 style={{ margin: 0 }}>Report &middot; {detail.id}</h3>
+                <div className="card-row">
+                  <a className="btn small primary" target="_blank" rel="noreferrer"
+                     href={runReportUrl(detail.id, 'html')}>open report</a>
+                  <a className="btn small" target="_blank" rel="noreferrer"
+                     href={runReportUrl(detail.id, 'pdf')}>PDF</a>
+                  <a className="btn ghost small" target="_blank" rel="noreferrer"
+                     href={runReportUrl(detail.id, 'html', true)}>regenerate</a>
+                </div>
+              </div>
+              <div className="hint">
+                A standalone page that explains this run rather than only
+                tabulating it: the controlled comparisons behind the
+                leaderboard, a glossary of every metric, and the caveats. Built
+                on first request and cached in the run folder, so the first
+                click takes a few seconds.
+              </div>
+            </div>
+            <div className="card">
               <h3>Leaderboard &middot; {detail.id} &middot; mean over scenes</h3>
               <div className="table-wrap">
                 <table>
@@ -311,11 +342,13 @@ export default function Runs({
               </div>
             </div>
 
-            {figures.filter((f) => !f.includes('__')).length > 0 && (
+            <TradeoffChart rows={detail.rows} />
+
+            {stillFigures.length > 0 && (
               <div className="card">
                 <h3>Figures</h3>
                 <div className="img-grid">
-                  {figures.filter((f) => !f.includes('__')).map((f) => (
+                  {stillFigures.map((f) => (
                     <div key={f} className="img-tile">
                       <div className="cap"><b>{f.replace('.png', '')}</b></div>
                       <img src={runFigureUrl(detail.id, f)} alt={f} loading="lazy"

@@ -41,6 +41,15 @@ python -m bench run -d middlebury:Teddy,Piano --repeats 3
 Results land in `results/<timestamp>/`: read `summary.md`, look at
 `figures/`, load `results.csv` for your own analysis.
 
+```bash
+python -m bench explain --open
+```
+
+That writes `report.html` next to the latest run: one self-contained page that
+explains what the numbers mean rather than only listing them -- the controlled
+comparisons behind the leaderboard, a glossary of every metric, and the
+caveats. Add `--pdf` for a printable copy.
+
 Nothing above is strictly required to get started -- with no dataset and no
 weights, `python -m bench run -d synthetic:3` still works, because the
 synthetic generator produces pairs with exact ground truth in-process.
@@ -177,7 +186,41 @@ results/<timestamp>/
     accuracy_vs_time.png           the trade-off, with the Pareto frontier marked
     accuracy_by_scene.png          heatmap -- who is merely average vs who collapses
     qualitative_<scene>.png        disparity maps on a shared colour scale
+  report.html                      written by `python -m bench explain`
+  report.pdf                       the same, with `--pdf`
 ```
+
+### The explained report
+
+`summary.md` answers *what* the numbers were. `python -m bench explain
+<run>` answers *what they mean*, as one self-contained HTML page -- no CDN, no
+sibling assets, so it can be mailed, committed or opened on a machine with no
+Python on it. The print stylesheet turns the browser's "Save as PDF" into a
+document rather than a screenshot of a web app, and `--pdf` does that for you
+through a headless Chrome or Edge.
+
+What it adds over the summary:
+
+- **Controlled comparisons.** A leaderboard says `scratch_census_sgm4` beat
+  `scratch_sad_wta`; it cannot say whether that was the cost function or the
+  aggregation, because both changed. The report groups algorithms by their
+  recipe and reports every comparison where exactly one component differs.
+- **Derived prose.** Each statement is assembled from this run's measurements
+  with the supporting numbers in it, so re-running the benchmark changes the
+  sentences and not just the tables. Nothing is written in advance.
+- **A metric glossary** attached to the columns it describes, so the two
+  framings of every error figure -- counting blanks as errors, and not -- are
+  explained where they are used.
+- **Interaction**: sortable leaderboard, a scatter whose Pareto frontier is
+  recomputed for whichever metric you put on the y axis, and a per-scene
+  heatmap you can switch between metrics.
+- **The caveats**, stated in the document rather than left to the reader.
+
+```bash
+python -m bench explain results/20261105-035941 --pdf --open
+```
+
+It is also reachable from the app: *Runs* -> pick a run -> **open report**.
 
 ---
 
@@ -401,6 +444,8 @@ bench/
   profiling.py          timing, CPU time, peak RSS, GPU memory, machine info
   runner.py             runs the grid; one failure never aborts the sweep
   report.py             summary.md and the figures
+  explain.py            derives the findings a report states -- pure, testable
+  explain_html.py       renders them as one self-contained page (and a PDF)
   splits.py             tune / held-out scene split, grouped by scene
   sweep.py              parameter grids, the selection rule, the sweep runner
   sweep_report.py       sweep tables and parameter-response figures

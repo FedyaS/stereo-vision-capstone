@@ -98,7 +98,19 @@ the same cores would make it meaningless.
 ### Runs
 
 Browse stored benchmark runs — the sortable leaderboard, the generated
-figures, and the full `summary.md`. You can also trigger a new batch run:
+figures, and the full `summary.md`.
+
+**open report** builds the narrative report for that run and opens it in a new
+tab: the controlled comparisons behind the leaderboard, a glossary of every
+metric, and the caveats, all derived from that run's own numbers. It is the
+same page `python -m bench explain` writes, cached in the run folder after the
+first click — a few seconds, most of it resampling the gallery thumbnails.
+**PDF** prints it through a headless Chrome or Edge, and **regenerate**
+rebuilds it from the run's data — useful if the run folder changed under it.
+Note that it rebuilds with the code the *running server* imported, so an edit
+to `bench/explain.py` needs `--reload` or a restart before it shows up.
+
+You can also trigger a new batch run:
 pick scenes and algorithms, and it writes to `results/<timestamp>/` exactly
 like `python -m bench run` does, with the same summary and figures. Progress
 polls while it works and it can be cancelled.

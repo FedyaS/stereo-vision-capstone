@@ -8,6 +8,8 @@
     python -m bench run -a opencv_sgbm_3way scratch_census_sgm4 --repeats 5
     python -m bench run -d synthetic:3 --threads 1
     python -m bench run -d practice --downscale 6 -a opencv learned
+    python -m bench explain                               # report for the latest run
+    python -m bench explain results/20261105-035941 --pdf --open
 """
 from __future__ import annotations
 
@@ -183,6 +185,54 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_explain(args: argparse.Namespace) -> int:
+    from .explain import write_report
+
+    run_dir = Path(args.run) if args.run else _latest_run(Path(args.root))
+    if run_dir is None:
+        print(
+            f"error: no runs found under {args.root!r}. "
+            "Run `python -m bench run` first.",
+            file=sys.stderr,
+        )
+        return 2
+    if not run_dir.is_dir():
+        print(f"error: {run_dir} is not a directory", file=sys.stderr)
+        return 2
+
+    try:
+        out = write_report(
+            run_dir,
+            args.out,
+            gallery_scenes=args.gallery_scenes,
+            gallery_algorithms=args.gallery_algorithms,
+            pdf=args.pdf,
+        )
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except RuntimeError as exc:  # no browser to print with
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Report: {out}")
+    if args.pdf:
+        print(f"HTML:   {out.with_suffix('.html')}")
+    if args.open:
+        import webbrowser
+
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
+def _latest_run(root: Path) -> Path | None:
+    """The most recent timestamped run folder under ``root``."""
+    if not root.is_dir():
+        return None
+    runs = [d for d in root.iterdir() if d.is_dir() and (d / "results.csv").exists()]
+    return max(runs, key=lambda d: d.name) if runs else None
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m bench",
@@ -271,6 +321,34 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("-o", "--out", default="results/sweeps",
                     help="output root; a timestamped subfolder is created")
     ps.set_defaults(func=_cmd_sweep)
+
+    pe = sub.add_parser(
+        "explain",
+        help="write an interactive HTML report explaining one run",
+        description="Read a finished run and write report.html next to it: the "
+        "leaderboard and figures, plus the controlled comparisons and the prose "
+        "that says what they mean. The page is self-contained -- one file, no "
+        "network -- and its print stylesheet makes 'Save as PDF' produce a "
+        "document rather than a screenshot of a web app.",
+    )
+    pe.add_argument(
+        "run", nargs="?", default=None,
+        help="a run directory (results/<timestamp>). Default: the most recent.",
+    )
+    pe.add_argument("--root", default="results",
+                    help="where to look for the most recent run")
+    pe.add_argument("-o", "--out", default=None,
+                    help="output path. Default: <run>/report.html")
+    pe.add_argument("--pdf", action="store_true",
+                    help="also print to PDF with a headless Chrome or Edge")
+    pe.add_argument("--open", action="store_true",
+                    help="open the result when it is written")
+    pe.add_argument("--gallery-scenes", type=int, default=2,
+                    help="how many scenes to show disparity maps for")
+    pe.add_argument("--gallery-algorithms", type=int, default=6,
+                    help="how many methods per gallery scene (the best, plus "
+                    "the worst for contrast)")
+    pe.set_defaults(func=_cmd_explain)
 
     return p
 

@@ -360,6 +360,42 @@ def run_figure(run_id: str, name: str = Query(...)) -> Response:
     return FileResponse(path, media_type="image/png")
 
 
+@app.get("/api/runs/{run_id}/report")
+def run_report(
+    run_id: str,
+    format: str = Query("html", pattern="^(html|pdf)$"),
+    refresh: bool = Query(False),
+) -> Response:
+    """The narrative report for one run, generated on first request.
+
+    Generation takes a couple of seconds (most of it resampling the gallery
+    thumbnails), so the file is written into the run folder and reused.
+    ``refresh=1`` rebuilds it from the run's data -- but with the code this
+    process imported, so an edit to ``bench/explain.py`` needs ``--reload``
+    or a restart to take effect.
+    """
+    from bench.explain import write_report
+
+    d = RESULTS_ROOT / Path(run_id).name
+    if not (d.is_dir() and (d / "results.csv").exists()):
+        raise HTTPException(404, f"no run {run_id!r}")
+
+    wanted = d / ("report.pdf" if format == "pdf" else "report.html")
+    if refresh or not wanted.exists():
+        try:
+            write_report(d, pdf=(format == "pdf"))
+        except RuntimeError as exc:  # no browser available to print with
+            raise HTTPException(503, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(500, f"could not build the report: {exc}") from exc
+
+    if format == "pdf":
+        return FileResponse(wanted, media_type="application/pdf",
+                            filename=f"stereo-report-{d.name}.pdf")
+    # Served inline rather than as JSON so the browser can just open the URL.
+    return Response(wanted.read_text(encoding="utf-8"), media_type="text/html")
+
+
 @app.get("/api/runs/{run_id}/figures")
 def run_figures(run_id: str) -> JSONResponse:
     folder = RESULTS_ROOT / run_id / "figures"
