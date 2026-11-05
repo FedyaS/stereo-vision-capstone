@@ -118,7 +118,7 @@ accuracy/time dial, so it sits in the same table as SGBM's path count.
 | `middlebury` | all 15 MiddEval3 quarter-res training scenes, dense float ground truth, non-occluded masks, per-scene `ndisp` |
 | `middlebury:Teddy,Piano` | just those scenes |
 | `synthetic[:N]` | generated pairs, **exact** ground truth, no download |
-| `practice` (any folder) | a folder with `im0`/`im1`; add `--downscale 6` for the 2964x2000 pair already in the repo |
+| `notebooks/practice` (any folder) | a folder with `im0`/`im1`; add `--downscale 6` for the 2964x2000 pair already in the repo |
 
 Each Middlebury scene brings its own disparity range from `calib.txt`, and the
 harness uses it: Jadeplant needs 160 disparities, Teddy needs 64. Giving every
@@ -217,10 +217,13 @@ What it adds over the summary:
 - **The caveats**, stated in the document rather than left to the reader.
 
 ```bash
-python -m bench explain results/20261105-035941 --pdf --open
+python -m bench explain results/<timestamp> --pdf --open
 ```
 
-It is also reachable from the app: *Runs* -> pick a run -> **open report**.
+With no argument it explains the most recent run. It is also reachable from
+the app: *Runs* -> pick a run -> **open report**. A pre-built copy for the
+headline run is committed at
+[`results/keep/20261105-035941/report.html`](results/keep/20261105-035941/report.html).
 
 ---
 
@@ -351,7 +354,8 @@ no depth.
 
 All 15 scenes x 23 algorithms = 345 cells, no failures, on an i9-13900HX
 (24 physical cores, no CUDA), with round-2 defaults. Full output in
-`results/20261105-035941/`. Reproduce with `python -m bench run`.
+[`results/keep/20261105-035941/`](results/keep/20261105-035941/) — the one run
+committed to the repository. Reproduce with `python -m bench run`.
 
 | rank | algorithm | bad2_all | wall_s | cpu_s | cores busy |
 |---|---|---|---|---|---|
@@ -438,7 +442,35 @@ more on an otherwise idle machine; accuracy is deterministic and unaffected.
 ## Project layout
 
 ```
+bench/          ✓ git   the harness -- pure Python, no web, no UI
+app/            ✓ git   the explorer -- a local web UI onto bench/
+scripts/        ✓ git   get_dataset.py · get_models.py · keep_result.py
+tests/          ✓ git   282 tests, ~65 s
+docs/           ✓ git   architecture.md · repository.md · figures/ · presentation/
+notebooks/      ✓ git   using bench from a notebook, and the original matcher
+data/           ✗ git   inputs: downloaded + uploaded image pairs
+models/         ✗ git   inputs: ONNX weights
+results/        ✗ git   outputs -- except results/keep/, which is committed
+```
+
+There is one benchmark harness and everything else is a front end onto it:
+`app/` imports `bench` and calls the same functions the CLI does, so a run
+triggered from the browser lands in `results/<timestamp>/` with the same
+`summary.md`. `bench/` has no dependency on `app/`.
+
+Three documents cover the rest:
+
+| | |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | **what runs where** -- the four processes, the module map, how one cell flows from loader to `results.csv`, with diagrams |
+| [`docs/repository.md`](docs/repository.md) | **what is committed** -- the full tree, the ignore rules and why, and how to commit a result that matters |
+| [`app/README.md`](app/README.md) | the explorer's four tabs, and what to try in them |
+
+Within the harness:
+
+```
 bench/
+  paths.py              every directory constant, in one place
   types.py              StereoPair, DisparityResult -- the two shared contracts
   metrics.py            bad N, EPE, RMSE, density, hole filling
   profiling.py          timing, CPU time, peak RSS, GPU memory, machine info
@@ -460,14 +492,21 @@ bench/
     scratch.py          NumPy/SciPy, every stage exposed
     torch_impl.py       the same maths as tensor ops
     learned.py          ONNX networks
-scripts/
-  get_dataset.py        download Middlebury MiddEval3 (quarter resolution)
-  get_models.py         download the ONNX weights
-app/                    interactive explorer (own README) -- see app/README.md
-tests/                  pytest suite: metrics, dataset loaders, per-algorithm
-                        contract tests, the sweep machinery and the app
-practice/               the original hand-written notebook and its image pair
 ```
+
+### Keeping a result
+
+`results/` is ignored -- a run is reproducible and a full one is tens of
+megabytes. When one does matter, `results/keep/` is un-ignored, so a plain
+`git add` works there and nowhere else under `results/`:
+
+```bash
+python scripts/keep_result.py 20261105-035941
+```
+
+That copies the run's small files (`summary.md`, `results.csv`, `run.json`,
+the report) and prints the `git add` line. `--figures` brings the PNGs too.
+Record *why* in [`results/keep/README.md`](results/keep/README.md).
 
 ### Adding an algorithm
 

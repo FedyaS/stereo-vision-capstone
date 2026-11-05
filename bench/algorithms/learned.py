@@ -27,17 +27,14 @@ pretrained network applied cold", not as RAFT-Stereo's published accuracy.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import numpy as np
 
 from ..types import DisparityResult, StereoPair
+from ..paths import MODELS_DIR as MODEL_DIR
 from .base import register
 
 _FAMILY = "learned"
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-MODEL_DIR = _REPO_ROOT / "models"
 
 # name -> (filename, huggingface repo path)
 MODEL_SOURCES: dict[str, tuple[str, str]] = {

@@ -1,43 +1,73 @@
-# Virtual environment
+# What is and is not committed.
+#
+# The rule: anything a command can regenerate stays out; anything a human
+# wrote, or deliberately chose to keep, goes in. See docs/repository.md.
+#
+# To commit a file that lands in an ignored directory, put it under
+# `results/keep/` -- that path is un-ignored, so plain `git add` works and
+# no `git add -f` is needed. `python scripts/keep_result.py <run>` copies a
+# run's small files there for you.
+
+# ---------------------------------------------------------------------------
+# Generated: benchmark output
+# ---------------------------------------------------------------------------
+# `results/*` rather than `results/` on purpose: git does not descend into an
+# ignored *directory*, so `results/` would make the un-ignore below dead.
+results/*
+!results/keep/
+
+# ---------------------------------------------------------------------------
+# Generated: downloaded inputs  (scripts/get_dataset.py, scripts/get_models.py)
+# ---------------------------------------------------------------------------
+data/*
+!data/README.md
+models/*
+!models/README.md
+
+# ---------------------------------------------------------------------------
+# Generated: Python
+# ---------------------------------------------------------------------------
 .venv/
 venv/
-
-# Benchmark outputs (regenerate with `python -m bench run`)
-results/
-
-# Downloaded data and model weights -- fetch with the scripts in scripts/
-data/middlebury/
-data/downloads/
-models/*.onnx
-models/*.part
-
-# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
 *.egg-info/
 
-# Jupyter
+# ---------------------------------------------------------------------------
+# Generated: Jupyter
+# ---------------------------------------------------------------------------
 .ipynb_checkpoints/
 
-# LaTeX build artifacts
-*.aux
-*.bbl
-*.blg
-*.log
-*.nav
-*.out
-*.snm
-*.synctex.gz
-*.toc
-
-# OS
-Thumbs.db
-.DS_Store
-
-# Web app build output and dependencies
+# ---------------------------------------------------------------------------
+# Generated: web frontend  (npm install / npm run build)
+# ---------------------------------------------------------------------------
 app/web/node_modules/
 app/web/dist/
+app/web/*.tsbuildinfo
 
-# Datasets uploaded through the app UI
-data/custom/
+# ---------------------------------------------------------------------------
+# Generated: LaTeX build products
+# ---------------------------------------------------------------------------
+# Scoped to the presentation rather than repo-wide: a bare `*.log` or `*.out`
+# would silently swallow an output file somebody meant to commit.
+docs/presentation/*.aux
+docs/presentation/*.bbl
+docs/presentation/*.blg
+docs/presentation/*.fdb_latexmk
+docs/presentation/*.fls
+docs/presentation/*.log
+docs/presentation/*.nav
+docs/presentation/*.out
+docs/presentation/*.snm
+docs/presentation/*.synctex.gz
+docs/presentation/*.toc
+docs/presentation/*.vrb
+
+# ---------------------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------------------
+Thumbs.db
+.DS_Store
+*.swp

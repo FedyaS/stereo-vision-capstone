@@ -62,13 +62,20 @@ def _download(url: str, dest: Path, force: bool = False) -> Path:
 
 
 def _safe_extract(archive: Path, dest: Path) -> int:
-    """Extract, refusing any entry that would escape ``dest``."""
+    """Extract, refusing any entry that would escape ``dest``.
+
+    The containment test is ``Path.is_relative_to``, not a string prefix
+    compare: ``str(target).startswith(str(root))`` also accepts a sibling
+    whose name merely begins with the root's, so an entry resolving to
+    ``data/middlebury-evil/x`` would pass a prefix check against
+    ``data/middlebury``.
+    """
     dest.mkdir(parents=True, exist_ok=True)
     root = dest.resolve()
     with zipfile.ZipFile(archive) as zf:
         for name in zf.namelist():
             target = (root / name).resolve()
-            if not str(target).startswith(str(root)):
+            if not target.is_relative_to(root):
                 raise RuntimeError(f"{archive.name}: unsafe path {name!r}")
         zf.extractall(root)
         return len(zf.namelist())
@@ -85,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     print(f"Middlebury MiddEval3 (quarter resolution) -> {EXTRACT_DIR}")
-    for key, name in ARCHIVES.items():
+    for name in ARCHIVES.values():
         path = _download(f"{BASE}/{name}", DOWNLOAD_DIR / name, force=args.force)
         n = _safe_extract(path, EXTRACT_DIR)
         print(f"  extracted {n} entries from {name}")

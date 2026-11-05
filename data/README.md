@@ -39,7 +39,15 @@ Jadeplant needs 160 disparities, Teddy 64.
 - `synthetic` -- generated in-process with exact ground truth, no download
   needed. See `bench/datasets/synthetic.py`.
 - any folder with `im0`/`im1` (or `left`/`right`), e.g. the full-resolution
-  pair in `practice/`: `python -m bench run -d practice --downscale 6`.
+  pair in `notebooks/practice/`:
+  `python -m bench run -d notebooks/practice --downscale 6`.
+
+## What is committed here
+
+Nothing but this file. `data/` is ignored wholesale (`data/*` with
+`!data/README.md`), because everything in it is either downloaded by
+`scripts/get_dataset.py` or uploaded through the app's Datasets tab. See
+`docs/repository.md`.
 
 ## Citation
 

@@ -1,5 +1,0 @@
-\beamer@sectionintoc {1}{Motivation}{3}{0}{1}
-\beamer@sectionintoc {2}{Stereo Geometry \& Disparity}{12}{0}{2}
-\beamer@sectionintoc {3}{Rectification \& Matching}{20}{0}{3}
-\beamer@sectionintoc {4}{Advanced \& Deep Learning Approaches}{39}{0}{4}
-\beamer@sectionintoc {5}{References}{51}{0}{5}

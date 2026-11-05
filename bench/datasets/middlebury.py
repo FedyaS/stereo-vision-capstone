@@ -16,10 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ..paths import MIDDLEBURY_DIR as DEFAULT_MIDDLEBURY_ROOT
 from ..types import StereoPair
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MIDDLEBURY_ROOT = _REPO_ROOT / "data" / "middlebury" / "MiddEval3"
 
 # Mask values in mask0nocc.png.
 _NONOCC = 255

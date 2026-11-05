@@ -7,7 +7,7 @@
     python -m bench run -a opencv scratch -d middlebury --limit 3
     python -m bench run -a opencv_sgbm_3way scratch_census_sgm4 --repeats 5
     python -m bench run -d synthetic:3 --threads 1
-    python -m bench run -d practice --downscale 6 -a opencv learned
+    python -m bench run -d notebooks/practice --downscale 6 -a opencv learned
     python -m bench explain                               # report for the latest run
     python -m bench explain results/20261105-035941 --pdf --open
 """
@@ -45,14 +45,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print()
 
     scenes = list_middlebury_scenes()
-    print(f"[datasets]")
+    print("[datasets]")
     print(f"   middlebury        {len(scenes)} scenes with ground truth")
     if scenes:
         print(f"                     {', '.join(scenes)}")
     else:
         print("                     not downloaded -- run scripts/get_dataset.py")
     print("   synthetic[:N]     generated pairs with exact ground truth")
-    print("   <folder>          a folder containing im0/im1 (e.g. `practice`)")
+    print("   <folder>          a folder with im0/im1 (e.g. `notebooks/practice`)")
     print()
 
     if args.verbose:
@@ -80,11 +80,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.dataset.split(":")[0] in ("middlebury", "synthetic"):
         pairs = resolve_pairs(args.dataset, limit=args.limit)
     else:
-        pairs = [
-            load_image_pair(
-                args.dataset, downscale=args.downscale, ndisp=args.ndisp
+        # A folder dataset. Report a bad path as an error rather than a
+        # traceback -- `-d` takes a folder, so a typo lands here, not in the
+        # "no pairs" branch below.
+        try:
+            pairs = [
+                load_image_pair(
+                    args.dataset, downscale=args.downscale, ndisp=args.ndisp
+                )
+            ]
+        except (NotADirectoryError, FileNotFoundError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            print(
+                "-d takes `middlebury[:Scene,...]`, `synthetic[:N]`, or a "
+                "folder holding im0/im1 (try `-d notebooks/practice "
+                "--downscale 6`).",
+                file=sys.stderr,
             )
-        ]
+            return 2
 
     if not pairs:
         print(

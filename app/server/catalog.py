@@ -24,10 +24,9 @@ import numpy as np
 from bench.datasets import list_middlebury_scenes, load_middlebury_scene
 from bench.datasets.local import load_image_pair
 from bench.datasets.synthetic import make_synthetic_pair
+from bench.paths import CUSTOM_DATA_DIR as CUSTOM_ROOT
+from bench.paths import REPO_ROOT
 from bench.types import StereoPair
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CUSTOM_ROOT = REPO_ROOT / "data" / "custom"
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 

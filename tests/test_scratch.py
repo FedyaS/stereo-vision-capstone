@@ -34,7 +34,7 @@ def _naive_sad_cost(left, right, ndisp, block):
     """The textbook triple loop: for every pixel, every disparity, sum |diff|.
 
     This is the same computation as the nested-loop block matcher in
-    ``practice/StereoAlgo1.ipynb``, kept as the reference the vectorised
+    ``notebooks/practice/StereoAlgo1.ipynb``, kept as the reference the vectorised
     version must reproduce.
     """
     lf = left.astype(np.float64)
