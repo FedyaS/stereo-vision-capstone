@@ -1,0 +1,22 @@
+# Core benchmark harness.
+#
+# opencv-contrib-python (not opencv-python) is required: the plain wheel has no
+# cv2.ximgproc (WLS disparity filter) or cv2.stereo (QuasiDenseStereo), so six
+# of the algorithms would report themselves unavailable.
+#
+# Pinned to 4.13.x deliberately: OpenCV 5.0 dropped the Python bindings for
+# parts of cv2.stereo.
+numpy>=1.26
+scipy>=1.11
+opencv-contrib-python>=4.13,<5.0
+pandas>=2.0
+matplotlib>=3.7
+psutil>=5.9
+py-cpuinfo>=9.0
+
+# Learned baselines (RAFT-Stereo via ONNX). Optional: without onnxruntime the
+# learned_* algorithms are skipped and everything else runs.
+onnxruntime>=1.16
+
+# Tests
+pytest>=7.4
