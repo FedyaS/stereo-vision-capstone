@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, resultImageUrl, sceneImageUrl } from '../api'
 import {
-  AlgorithmPicker, ImageTile, MetricsPanel, ParamControls, ScenePicker,
-  useDebounced,
+  AlgorithmPicker, ImageTile, MetricsPanel, ParamControls, SceneSelect,
+  useDebounced, useScene,
 } from '../components'
-import type { Algorithm, ComputeResult, Scene } from '../types'
+import type {
+  Algorithm, ComputeResult, DatasetCollection, Scene,
+} from '../types'
 
 const THRESHOLDS = [0.5, 1, 2, 4]
 
 export default function Playground({
-  scenes, algorithms,
-}: { scenes: Scene[]; algorithms: Algorithm[] }) {
+  scenes, algorithms, collections,
+}: {
+  scenes: Scene[]
+  algorithms: Algorithm[]
+  collections: DatasetCollection[]
+}) {
   const [sceneId, setSceneId] = useState('middlebury/Teddy')
   const [algoName, setAlgoName] = useState('scratch_census_sgm4')
   const [params, setParams] = useState<Record<string, unknown>>({})
@@ -28,10 +34,7 @@ export default function Playground({
     () => algorithms.find((a) => a.name === algoName),
     [algorithms, algoName],
   )
-  const scene = useMemo(
-    () => scenes.find((s) => s.id === sceneId),
-    [scenes, sceneId],
-  )
+  const scene = useScene(scenes, sceneId)
 
   // Reset parameters to the algorithm's shipped defaults when it changes.
   const resetParams = useCallback(() => {
@@ -110,7 +113,10 @@ export default function Playground({
           <h3>Scene</h3>
           <label className="field">
             <span className="lbl"><b>image pair</b></span>
-            <ScenePicker scenes={scenes} value={sceneId} onChange={setSceneId} />
+            <SceneSelect
+              scenes={scenes} collections={collections}
+              value={sceneId} onChange={setSceneId}
+            />
           </label>
           <label className="field">
             <span className="lbl">

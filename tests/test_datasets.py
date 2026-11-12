@@ -176,3 +176,83 @@ def test_middlebury_missing_scene_message():
     with pytest.raises(FileNotFoundError) as exc:
         load_middlebury_scene("NotAScene")
     assert "get_dataset" in str(exc.value)
+
+
+# --------------------------------------------------------------------------
+# folders of pairs, at any depth
+# --------------------------------------------------------------------------
+
+
+def test_find_pair_dirs_handles_every_layout(tmp_path):
+    """One notion of "a folder of images", whatever shape it has on disk."""
+    import cv2
+
+    from bench.datasets import find_pair_dirs, is_pair_dir
+
+    def pair(folder, left="im0", right="im1", ext=".png"):
+        folder.mkdir(parents=True, exist_ok=True)
+        img = np.zeros((8, 8, 3), np.uint8)
+        cv2.imwrite(str(folder / f"{left}{ext}"), img)
+        cv2.imwrite(str(folder / f"{right}{ext}"), img)
+
+    # a single pair: the folder itself, not its children
+    single = tmp_path / "single"
+    pair(single)
+    assert is_pair_dir(single)
+    assert find_pair_dirs(single) == [single]
+
+    # flat
+    flat = tmp_path / "flat"
+    for i in range(3):
+        pair(flat / f"{i:05d}")
+    assert len(find_pair_dirs(flat)) == 3
+
+    # splits, and one level deeper than that
+    deep = tmp_path / "deep"
+    pair(deep / "run1" / "train" / "00000")
+    pair(deep / "run1" / "val" / "00000", left="left", right="right", ext=".jpg")
+    found = find_pair_dirs(deep)
+    assert [p.name for p in found] == ["00000", "00000"]
+    assert {p.parent.name for p in found} == {"train", "val"}
+
+    # the order is stable and a limit takes a prefix of it
+    assert find_pair_dirs(flat, limit=2) == find_pair_dirs(flat)[:2]
+
+    # a folder with no pair in it is empty, not an error
+    (tmp_path / "empty" / "nothing").mkdir(parents=True)
+    assert find_pair_dirs(tmp_path / "empty") == []
+
+
+def test_load_pair_folder_names_pairs_by_their_path(tmp_path):
+    """A result row has to say which sample it came from."""
+    import cv2
+
+    from bench.datasets import load_pair_folder
+
+    for split in ("test", "train"):
+        d = tmp_path / "set" / split / "00000"
+        d.mkdir(parents=True)
+        img = np.zeros((8, 8, 3), np.uint8)
+        cv2.imwrite(str(d / "im0.png"), img)
+        cv2.imwrite(str(d / "im1.png"), img)
+
+    pairs = load_pair_folder(tmp_path / "set")
+    assert [p.name for p in pairs] == ["set/test/00000", "set/train/00000"]
+
+
+def test_resolve_pairs_accepts_a_nested_folder(tmp_path):
+    """``-d <path>`` works on a dataset copied in by hand, not just on the
+    layouts the generator happens to write."""
+    import cv2
+
+    from bench.datasets import resolve_pairs
+
+    for i in range(2):
+        d = tmp_path / "set" / "run1" / "train" / f"{i:05d}"
+        d.mkdir(parents=True)
+        img = np.zeros((8, 8, 3), np.uint8)
+        cv2.imwrite(str(d / "im0.png"), img)
+        cv2.imwrite(str(d / "im1.png"), img)
+
+    assert len(resolve_pairs(str(tmp_path / "set"))) == 2
+    assert len(resolve_pairs(str(tmp_path / "set"), limit=1)) == 1

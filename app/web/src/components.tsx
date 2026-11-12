@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Algorithm, ComputeResult, Metrics, ParamSpec, Scene } from './types'
+import { api } from './api'
+import type {
+  Algorithm, ComputeResult, DatasetCollection, Metrics, ParamSpec, Scene,
+} from './types'
 
 export const fmt = (v: number | null | undefined, digits = 2, suffix = '') =>
   v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits) + suffix
@@ -297,6 +300,200 @@ export function ScenePicker({
         </optgroup>
       ))}
     </select>
+  )
+}
+
+/** Metadata for the selected pair, whether or not it is in the catalogue.
+ *
+ *  Scenes reached by browsing a dataset are deliberately absent from
+ *  `/api/scenes`, so a view that looked them up there alone would show "no
+ *  GT" for a pair that has ground truth and blank chips for its size. Falls
+ *  back to asking for that one scene, and remembers the answer: the
+ *  Playground re-renders on every slider drag.
+ */
+const sceneCache = new Map<string, Scene>()
+
+export function useScene(scenes: Scene[], sceneId: string): Scene | undefined {
+  const listed = scenes.find((s) => s.id === sceneId)
+  const [fetched, setFetched] = useState<Scene | undefined>(
+    () => sceneCache.get(sceneId),
+  )
+
+  useEffect(() => {
+    if (listed) return
+    const cached = sceneCache.get(sceneId)
+    if (cached) { setFetched(cached); return }
+    let live = true
+    setFetched(undefined)
+    api.scene(sceneId)
+      .then((s) => {
+        sceneCache.set(sceneId, s)
+        if (live) setFetched(s)
+      })
+      .catch(() => { /* a bad id surfaces through the run itself */ })
+    return () => { live = false }
+  }, [sceneId, listed])
+
+  return listed ?? (fetched?.id === sceneId ? fetched : undefined)
+}
+
+/** Indentation for a dataset that sits inside another selected one, so a
+ *  set and its train/val/test subsets read as a tree rather than as four
+ *  unrelated rows with confusingly similar names. */
+function nesting(id: string, ids: string[]): number {
+  let depth = 0
+  for (const other of ids) {
+    if (other !== id && id.startsWith(other + '/')) depth += 1
+  }
+  return depth
+}
+
+export function collectionLabel(c: DatasetCollection): string {
+  const splits = Object.keys(c.splits)
+  return (
+    `${c.count} pair${c.count === 1 ? '' : 's'}`
+    + (splits.length > 1 ? ` · ${splits.length} subsets` : '')
+    + (c.has_gt ? '' : ' · no GT')
+  )
+}
+
+/** Multi-select over whole datasets. The counterpart to picking pairs one by
+ *  one: one click selects every pair in a folder, which is the only workable
+ *  way to benchmark a generated set of a hundred. */
+export function DatasetPicker({
+  collections, picked, onChange,
+}: {
+  collections: DatasetCollection[]
+  picked: string[]
+  onChange: (next: string[]) => void
+}) {
+  const ids = collections.map((c) => c.id)
+  const toggle = (id: string) =>
+    onChange(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id])
+
+  if (collections.length === 0) {
+    return (
+      <div className="muted" style={{ fontSize: 12.5, padding: '6px 0' }}>
+        No datasets found. Drop a folder of stereo pairs into
+        <span className="mono"> data/custom/</span> — any depth of
+        subfolders is fine — or generate one in the Synthesize tab.
+      </div>
+    )
+  }
+
+  return (
+    <div className="scroll-list pick-list" style={{ maxHeight: 190 }}>
+      {collections.map((c) => (
+        <label
+          key={c.id}
+          className={`pick ${picked.includes(c.id) ? 'on' : ''}`}
+          style={{ paddingLeft: 8 + nesting(c.id, ids) * 14 }}
+          title={c.path}
+        >
+          <input
+            type="checkbox"
+            checked={picked.includes(c.id)}
+            onChange={() => toggle(c.id)}
+          />
+          <span>
+            {c.name} <span className="muted">{c.kind}</span>
+            <div className="muted" style={{ fontSize: 11 }}>
+              {collectionLabel(c)}
+            </div>
+          </span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+/** Pick one pair: either from the catalogue of individually listed scenes,
+ *  or by stepping through a dataset.
+ *
+ *  A dataset folder contributes only its first handful of samples to
+ *  `/api/scenes` — listing twenty thousand would mean decoding twenty
+ *  thousand images to describe them. Browsing by dataset asks for that set's
+ *  ids on demand instead, so every pair in it is reachable here, not just
+ *  the ones the catalogue happens to list.
+ */
+export function SceneSelect({
+  scenes, collections, value, onChange,
+}: {
+  scenes: Scene[]
+  collections: DatasetCollection[]
+  value: string
+  onChange: (v: string) => void
+}) {
+  const [dataset, setDataset] = useState('')
+  const [samples, setSamples] = useState<string[]>([])
+  const [loading, setLoading] = useState(false)
+
+  // Held in a ref so switching dataset does not re-run on every parent
+  // render just because the callback identity changed.
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
+  useEffect(() => {
+    if (!dataset) { setSamples([]); return }
+    let live = true
+    setLoading(true)
+    api.datasetScenes(dataset, 5000)
+      .then((r) => {
+        if (!live) return
+        setSamples(r.scene_ids)
+        if (r.scene_ids.length) onChangeRef.current(r.scene_ids[0])
+      })
+      .catch(() => { if (live) setSamples([]) })
+      .finally(() => { if (live) setLoading(false) })
+    return () => { live = false }
+  }, [dataset])
+
+  const index = samples.indexOf(value)
+  const step = (by: number) => {
+    if (!samples.length) return
+    const next = (index + by + samples.length) % samples.length
+    onChange(samples[next])
+  }
+
+  const browsable = collections.filter((c) => c.count > 1)
+
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      {browsable.length > 0 && (
+        <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
+          <option value="">browse: all listed scenes</option>
+          {browsable.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.kind}/{c.name} — {c.count} pairs
+            </option>
+          ))}
+        </select>
+      )}
+
+      {dataset ? (
+        <div className="card-row">
+          <select
+            value={value}
+            style={{ flex: 1, minWidth: 0 }}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {!samples.includes(value) && <option value={value}>{value}</option>}
+            {samples.map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+          <button className="ghost small" onClick={() => step(-1)}
+                  disabled={!samples.length}>◀</button>
+          <button className="ghost small" onClick={() => step(1)}
+                  disabled={!samples.length}>▶</button>
+          <span className="muted" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
+            {loading ? 'loading…' : `${index + 1}/${samples.length}`}
+          </span>
+        </div>
+      ) : (
+        <ScenePicker scenes={scenes} value={value} onChange={onChange} />
+      )}
+    </div>
   )
 }
 

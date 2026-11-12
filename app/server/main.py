@@ -109,6 +109,79 @@ def scenes() -> JSONResponse:
     return ok(out)
 
 
+@app.get("/api/datasets")
+def datasets() -> JSONResponse:
+    """Whole datasets, as opposed to the individual pairs ``/api/scenes`` lists.
+
+    A dataset is any folder with stereo pairs below it, plus each group of
+    samples inside it, so a generated set shows up both as a whole and split
+    by split. Counts come from the directory tree -- no image is decoded --
+    so this stays fast for a set with thousands of pairs.
+    """
+    return ok(catalog.list_collections())
+
+
+@app.get("/api/dataset/scenes")
+def dataset_scenes(
+    id: str = Query(...),
+    limit: int | None = Query(None, ge=1, le=20000),
+) -> JSONResponse:
+    """The scene ids inside one dataset, for previewing or picking by hand."""
+    try:
+        ids = catalog.expand(id, limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    total = len(ids) if limit is None else len(catalog.expand(id))
+    return ok({"id": id, "scene_ids": ids, "total": total})
+
+
+class ResolveRequest(BaseModel):
+    scene_ids: list[str] = Field(default_factory=list)
+    dataset_ids: list[str] = Field(default_factory=list)
+    limit: int | None = Field(None, ge=1, le=20000)
+
+
+@app.post("/api/datasets/resolve")
+def resolve_datasets(req: ResolveRequest) -> JSONResponse:
+    """Exactly which pairs a mixed selection comes to.
+
+    The UI needs the real number before it offers to start a run -- "run 240
+    cells" has to be the truth, and the overlap between a dataset and a
+    subset of it selected alongside it can only be resolved where the
+    dedupe happens. Same code path as the job, so the count cannot disagree
+    with what then runs.
+    """
+    try:
+        ids = catalog.resolve_selection(
+            req.scene_ids, req.dataset_ids, limit=req.limit
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return ok({"total": len(ids), "scene_ids": ids[:200]})
+
+
+@app.get("/api/scene")
+def scene(id: str = Query(...)) -> JSONResponse:
+    """Metadata for one scene by id.
+
+    ``/api/scenes`` lists only the pairs worth putting in a picker -- a
+    dataset folder contributes a handful, not all twenty thousand of its
+    samples. Anything reached by browsing a dataset is therefore not in that
+    list, and the UI still needs its size, disparity range and whether it
+    has ground truth, or it would report "no GT" for a pair that has one.
+    """
+    try:
+        return ok(catalog.describe(id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/scene/image")
 def scene_image(
     id: str = Query(...),
@@ -521,7 +594,19 @@ def run_figures(run_id: str) -> JSONResponse:
 
 
 class BenchmarkRequest(BaseModel):
-    scene_ids: list[str]
+    """What to benchmark.
+
+    ``scene_ids`` names individual pairs and ``dataset_ids`` names whole
+    folders; both may be given. The two are flattened server-side, so the
+    browser never has to enumerate a thousand sample ids just to say "run on
+    this dataset", and a pair selected both ways is only run once.
+    """
+
+    scene_ids: list[str] = Field(default_factory=list)
+    dataset_ids: list[str] = Field(default_factory=list)
+    #: Cap on pairs taken from each dataset -- a quick pass over the first N
+    #: of a large set. Null means every pair in it.
+    limit: int | None = Field(None, ge=1, le=20000)
     algorithms: list[str]
     repeats: int = Field(1, ge=1, le=10)
     warmup: int = Field(1, ge=0, le=3)
@@ -533,8 +618,16 @@ class BenchmarkRequest(BaseModel):
 @app.post("/api/jobs/benchmark")
 def start_benchmark(req: BenchmarkRequest) -> JSONResponse:
     try:
+        scene_ids = catalog.resolve_selection(
+            req.scene_ids, req.dataset_ids, limit=req.limit
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
         job = jobs.start_benchmark(
-            req.scene_ids, req.algorithms,
+            scene_ids, req.algorithms,
             repeats=req.repeats, warmup=req.warmup, downscale=req.downscale,
             eval_region=req.eval_region, save_figures=req.save_figures,
         )

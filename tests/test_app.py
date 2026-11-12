@@ -413,3 +413,133 @@ def test_catalog_lists_and_loads_split_generated_datasets(tmp_path, monkeypatch)
     for bad in ("synth/flat/../../escape", "synth/flat/a/b/c"):
         with pytest.raises((ValueError, FileNotFoundError)):
             catalog.load(bad)
+
+
+# --------------------------------------------------------------------------
+# dataset folders
+# --------------------------------------------------------------------------
+
+
+def _write_pair(folder, *, gt: bool = True, ndisp: int = 32) -> None:
+    """A minimal but real stereo pair on disk, in the Middlebury layout."""
+    import cv2
+
+    from bench.datasets.middlebury import write_pfm
+
+    folder.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(abs(hash(str(folder))) % (2**32))
+    img = rng.integers(0, 255, (24, 32, 3), dtype=np.uint8)
+    cv2.imwrite(str(folder / "im0.png"), img)
+    cv2.imwrite(str(folder / "im1.png"), np.roll(img, -3, axis=1))
+    (folder / "calib.txt").write_text(f"width=32\nheight=24\nndisp={ndisp}\n")
+    if gt:
+        write_pfm(folder / "disp0GT.pfm", np.full((24, 32), 3.0, np.float32))
+
+
+@pytest.fixture
+def nested_custom(tmp_path, monkeypatch):
+    """A dataset copied in by hand: pairs two levels down, with splits.
+
+    This is the shape the uploader never writes and the one people actually
+    produce -- a generated set moved into ``data/custom/`` keeps its own
+    ``train``/``val``/``test`` folders.
+    """
+    root = tmp_path / "data" / "custom"
+    for split, n in (("train", 3), ("val", 2)):
+        for i in range(n):
+            _write_pair(root / "my-set" / "run1" / split / f"{i:05d}")
+    _write_pair(root / "single-pair")
+    monkeypatch.setattr(catalog, "CUSTOM_ROOT", root)
+    monkeypatch.setattr(catalog, "SYNTH_DATA_DIR", tmp_path / "data" / "synth")
+    catalog._cache.clear()
+    yield root
+    catalog._cache.clear()
+
+
+def test_a_nested_dataset_folder_is_found_as_a_collection(nested_custom, client):
+    """The bug this all started from: a folder of pairs that never showed up.
+
+    ``list_custom`` only ever accepted ``data/custom/<name>/im0.png``, so a
+    dataset with its samples in subfolders was invisible everywhere in the
+    app -- no scene, no dataset, nothing to select.
+    """
+    body = client.get("/api/datasets").json()
+    rows = {r["id"]: r for r in body}
+
+    assert rows["custom/my-set"]["count"] == 5
+    assert rows["custom/my-set"]["splits"] == {"run1/train": 3, "run1/val": 2}
+    assert rows["custom/my-set"]["has_gt"] is True
+    assert rows["custom/my-set"]["ndisp"] == 32
+    # Each group of samples is selectable on its own, so val can be held out.
+    assert rows["custom/my-set/run1/val"]["count"] == 2
+    # A single uploaded pair is not a collection; it stays a plain scene.
+    assert "custom/single-pair" not in rows
+    assert catalog.list_custom() == ["single-pair"]
+
+
+def test_a_dataset_expands_to_its_pairs(nested_custom, client):
+    body = client.get("/api/dataset/scenes", params={"id": "custom/my-set"}).json()
+    assert body["total"] == 5
+    assert body["scene_ids"][0] == "custom/my-set/run1/train/00000"
+
+    # ...and the ids it hands back are loadable scenes.
+    for sid in body["scene_ids"]:
+        pair = catalog.load(sid)
+        assert pair.shape == (24, 32)
+        assert pair.has_gt
+
+
+def test_a_dataset_limit_takes_a_stable_prefix(nested_custom, client):
+    body = client.get(
+        "/api/dataset/scenes", params={"id": "custom/my-set", "limit": 2}
+    ).json()
+    assert body["scene_ids"] == [
+        "custom/my-set/run1/train/00000", "custom/my-set/run1/train/00001",
+    ]
+    # The cap does not hide how big the set really is.
+    assert body["total"] == 5
+
+
+def test_resolving_a_selection_dedupes_overlapping_datasets(nested_custom, client):
+    """Selecting a set and a subset of it must not run those pairs twice."""
+    body = client.post("/api/datasets/resolve", json={
+        "dataset_ids": ["custom/my-set", "custom/my-set/run1/val"],
+        "scene_ids": ["custom/my-set/run1/train/00000"],
+    }).json()
+    assert body["total"] == 5
+    assert len(set(body["scene_ids"])) == 5
+
+
+def test_scene_listing_caps_a_dataset_folder(nested_custom, monkeypatch, client):
+    """A folder of thousands must not turn /api/scenes into a thousand decodes."""
+    monkeypatch.setattr(catalog, "SYNTH_SAMPLES_LISTED", 2)
+    ids = catalog.scene_ids()
+    assert len([i for i in ids if i.startswith("custom/my-set/")]) == 2
+    assert "custom/single-pair" in ids
+
+
+def test_a_benchmark_can_be_started_from_a_dataset_id(nested_custom, client):
+    """The whole point: one id instead of five, and the job sees five scenes."""
+    res = client.post("/api/jobs/benchmark", json={
+        "dataset_ids": ["custom/my-set/run1/val"],
+        "algorithms": ["opencv_bm"],
+        "downscale": 1.0,
+        "save_figures": False,
+    })
+    assert res.status_code == 200, res.text
+    job = res.json()
+    # Two pairs x one algorithm, expanded server-side.
+    assert job["total"] == 2
+
+
+def test_an_unknown_dataset_id_is_a_404_not_a_500(client):
+    res = client.get("/api/dataset/scenes", params={"id": "custom/nope"})
+    assert res.status_code == 404
+    res = client.get("/api/dataset/scenes", params={"id": "nonsense/x"})
+    assert res.status_code == 400
+
+
+def test_a_dataset_id_cannot_escape_the_data_root(nested_custom, client):
+    for bad in ("custom/../../etc", "custom/my-set/../../../.."):
+        res = client.get("/api/dataset/scenes", params={"id": bad})
+        assert res.status_code in (400, 404), (bad, res.status_code)

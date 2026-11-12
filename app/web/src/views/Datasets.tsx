@@ -1,11 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, sceneImageUrl } from '../api'
 import { ImageTile } from '../components'
-import type { Scene } from '../types'
+import type { DatasetCollection, Scene } from '../types'
 
 export default function Datasets({
-  scenes, onChanged,
-}: { scenes: Scene[]; onChanged: () => void }) {
+  scenes, collections, onChanged,
+}: {
+  scenes: Scene[]
+  collections: DatasetCollection[]
+  onChanged: () => void
+}) {
+  const [browse, setBrowse] = useState<string | null>(null)
+  const [browseIds, setBrowseIds] = useState<string[]>([])
+  const [browseTotal, setBrowseTotal] = useState(0)
   const [name, setName] = useState('')
   const [ndisp, setNdisp] = useState(128)
   const [left, setLeft] = useState<File | null>(null)
@@ -16,6 +23,22 @@ export default function Datasets({
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
+
+  /* Sample ids for the opened dataset. Fetched on demand and capped: a
+     generated set can hold thousands, and the point of this list is to let
+     you eyeball a few, not to render all of them. */
+  useEffect(() => {
+    if (!browse) { setBrowseIds([]); setBrowseTotal(0); return }
+    let live = true
+    api.datasetScenes(browse, 60)
+      .then((r) => {
+        if (!live) return
+        setBrowseIds(r.scene_ids)
+        setBrowseTotal(r.total)
+      })
+      .catch(() => { if (live) { setBrowseIds([]); setBrowseTotal(0) } })
+    return () => { live = false }
+  }, [browse])
 
   const upload = async () => {
     if (!left || !right) { setError('pick both a left and a right image'); return }
@@ -66,7 +89,14 @@ export default function Datasets({
     }
   }
 
-  const custom = scenes.filter((s) => s.kind === 'custom')
+  /* Only pairs uploaded through the form above: those sit directly in
+     data/custom/<name>/, so their id has no further path. A sample of a
+     dataset folder is also kind "custom", and offering to delete one here
+     would mean offering to delete one image pair out of someone's dataset
+     from a list that claims to show uploads. */
+  const custom = scenes.filter(
+    (s) => s.kind === 'custom' && !s.name.includes('/'),
+  )
 
   return (
     <div className="split">
@@ -154,16 +184,110 @@ export default function Datasets({
 
         <div className="card">
           <div className="row-between" style={{ marginBottom: 10 }}>
-            <h3 style={{ margin: 0 }}>Your datasets ({custom.length})</h3>
+            <h3 style={{ margin: 0 }}>Dataset folders ({collections.length})</h3>
+            <button className="ghost small" onClick={onChanged}>rescan</button>
+          </div>
+          <div className="hint" style={{ marginBottom: 10 }}>
+            Copy a folder of stereo pairs into
+            <span className="mono"> data/custom/</span> and press
+            <b> rescan</b>. Any shape works: one pair, a flat folder of
+            samples, or splits with samples under them — a "pair" is just a
+            folder holding <span className="mono">im0</span>/
+            <span className="mono">im1</span> (or
+            <span className="mono"> left</span>/
+            <span className="mono">right</span>) images, optionally with
+            <span className="mono"> disp0GT.pfm</span> and
+            <span className="mono"> calib.txt</span> beside them. Whole
+            folders are selectable in the <b>Runs</b> tab.
+          </div>
+          {collections.length === 0 && (
+            <div className="muted" style={{ fontSize: 12.5 }}>
+              No dataset folders yet.
+            </div>
+          )}
+          <div className="table-wrap" style={{ maxHeight: 320 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>dataset</th><th>kind</th><th>pairs</th><th>subsets</th>
+                  <th>GT</th><th>ndisp</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {collections.map((c) => {
+                  const depth = collections.filter(
+                    (o) => o.id !== c.id && c.id.startsWith(o.id + '/'),
+                  ).length
+                  const splits = Object.entries(c.splits)
+                  return (
+                    <tr key={c.id}>
+                      <td style={{ paddingLeft: 8 + depth * 16 }} title={c.path}>
+                        {c.name}
+                      </td>
+                      <td>{c.kind}</td>
+                      <td className="num">{c.count}</td>
+                      <td className="muted" style={{ fontSize: 11.5 }}>
+                        {splits.length
+                          ? splits.map(([k, v]) => `${k} (${v})`).join(', ')
+                          : '—'}
+                      </td>
+                      <td className="num">{c.has_gt ? 'yes' : '—'}</td>
+                      <td className="num">{c.ndisp ?? '—'}</td>
+                      <td>
+                        <button
+                          className="ghost small"
+                          onClick={() => setBrowse(browse === c.id ? null : c.id)}
+                        >
+                          {browse === c.id ? 'close' : 'browse'}
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {browse && (
+            <div style={{ marginTop: 10 }}>
+              <div className="row-between" style={{ marginBottom: 6 }}>
+                <b style={{ fontSize: 12.5 }}>{browse}</b>
+                <span className="muted" style={{ fontSize: 11.5 }}>
+                  showing {browseIds.length} of {browseTotal}
+                </span>
+              </div>
+              <div className="scroll-list pick-list" style={{ maxHeight: 170 }}>
+                {browseIds.map((id) => (
+                  <div
+                    key={id}
+                    className={`pick ${preview === id ? 'on' : ''}`}
+                    onClick={() => setPreview(id)}
+                  >
+                    <span className="mono" style={{ fontSize: 11.5 }}>{id}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                Click a pair to preview it. Every pair in the set is reachable
+                from the Playground's dataset browser, and the whole set is one
+                checkbox in the Runs tab.
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="row-between" style={{ marginBottom: 10 }}>
+            <h3 style={{ margin: 0 }}>Uploaded pairs ({custom.length})</h3>
             {/* Folders can also be dropped into data/custom/ by hand, so the
                 catalogue needs a way to be re-read without a page reload. */}
             <button className="ghost small" onClick={onChanged}>rescan</button>
           </div>
           {custom.length === 0 && (
             <div className="muted" style={{ fontSize: 12.5 }}>
-              Nothing uploaded yet. Added pairs live in
-              <span className="mono"> data/custom/</span> and show up everywhere
-              the built-in scenes do.
+              Nothing uploaded yet. Pairs added with the form on the left live
+              in <span className="mono">data/custom/&lt;name&gt;/</span> and show
+              up everywhere the built-in scenes do. A folder holding many pairs
+              is listed above as a dataset instead.
             </div>
           )}
           {custom.map((s) => (
@@ -187,7 +311,13 @@ export default function Datasets({
         </div>
 
         <div className="card">
-          <h3>All scenes ({scenes.length})</h3>
+          <h3>Individually listed scenes ({scenes.length})</h3>
+          <div className="hint" style={{ marginBottom: 8 }}>
+            Every built-in scene plus the first {12} samples of each dataset
+            folder — enough to pick one by hand in the Playground. The rest of
+            a folder is reached by browsing the dataset, or run as a whole in
+            the Runs tab.
+          </div>
           <div className="table-wrap" style={{ maxHeight: 300 }}>
             <table>
               <thead>

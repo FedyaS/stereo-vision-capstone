@@ -18,8 +18,7 @@ import sys
 from pathlib import Path
 
 from .algorithms import all_specs, select
-from .datasets import list_middlebury_scenes, resolve_pairs
-from .datasets.local import load_image_pair
+from .datasets import list_middlebury_scenes, load_pair_folder, resolve_pairs
 from .profiling import machine_info
 from .report import write_all
 from .runner import RunConfig, run_benchmark
@@ -84,24 +83,29 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     args.dataset = _dataset_spec(args.dataset)
-    if args.dataset.split(":")[0] in ("middlebury", "synthetic"):
+    # A path that exists wins over a spec keyword, so a folder that happens
+    # to be called `synth` is still read from disk.
+    is_folder = Path(args.dataset).is_dir()
+    if not is_folder and args.dataset.split(":")[0] in (
+        "middlebury", "synthetic", "synth",
+    ):
         pairs = resolve_pairs(args.dataset, limit=args.limit)
     else:
-        # A folder dataset. Report a bad path as an error rather than a
-        # traceback -- `-d` takes a folder, so a typo lands here, not in the
-        # "no pairs" branch below.
+        # A folder dataset: one pair, or every pair below it -- a generated
+        # set, one split of one, or a directory of samples copied in by
+        # hand. A bad path is reported as an error rather than a traceback,
+        # because `-d` takes a folder and a typo lands here.
         try:
-            pairs = [
-                load_image_pair(
-                    args.dataset, downscale=args.downscale, ndisp=args.ndisp
-                )
-            ]
+            pairs = load_pair_folder(
+                args.dataset, limit=args.limit,
+                downscale=args.downscale, ndisp=args.ndisp,
+            )
         except (NotADirectoryError, FileNotFoundError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             print(
-                "-d takes `middlebury[:Scene,...]`, `synthetic[:N]`, or a "
-                "folder holding im0/im1 (try `-d notebooks/practice "
-                "--downscale 6`).",
+                "-d takes `middlebury[:Scene,...]`, `synthetic[:N]`, "
+                "`synth:<environment>`, or a folder with im0/im1 images in "
+                "it or below it (try `-d notebooks/practice --downscale 6`).",
                 file=sys.stderr,
             )
             return 2

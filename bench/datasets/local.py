@@ -19,6 +19,86 @@ _LEFT_NAMES = ("im0", "left", "imL", "view1")
 _RIGHT_NAMES = ("im1", "right", "imR", "view5")
 _EXTS = (".png", ".jpg", ".jpeg", ".ppm", ".pgm", ".tif", ".tiff", ".bmp")
 
+#: How deep below a dataset folder to look for stereo pairs. A generated set
+#: is ``<root>/<split>/<index>/im0.png`` (depth 2) and a hand-made one is
+#: often one level shallower or deeper, so three levels covers the layouts
+#: people actually produce without walking an entire drive by accident.
+MAX_PAIR_DEPTH = 4
+
+
+def is_pair_dir(folder: str | Path) -> bool:
+    """True if ``folder`` itself holds one stereo pair.
+
+    One ``iterdir`` rather than a probe per name/extension combination: this
+    runs over every directory of a dataset that can hold tens of thousands of
+    samples, and 32 stat calls per directory is the difference between a
+    listing that is instant and one that is not.
+    """
+    folder = Path(folder)
+    try:
+        stems = {
+            p.stem for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in _EXTS
+        }
+    except (OSError, NotADirectoryError):
+        return False
+    return (
+        any(s in stems for s in _LEFT_NAMES)
+        and any(s in stems for s in _RIGHT_NAMES)
+    )
+
+
+def find_pair_dirs(
+    root: str | Path, *, max_depth: int = MAX_PAIR_DEPTH, limit: int | None = None
+) -> list[Path]:
+    """Every stereo pair at or below ``root``, in a stable order.
+
+    This is the one notion of "a folder of images" the app has, so a dataset
+    added by hand loads the same way whatever shape it has: a single pair
+    (``root`` itself), a flat folder of numbered samples, or splits with
+    samples under them. Directories are visited in sorted order and a pair
+    directory is never descended into, so the result is reproducible and a
+    run over the same folder twice covers the same pairs in the same order.
+
+    ``limit`` stops the walk early -- used when a picker needs only the first
+    handful of samples and the set on disk has thousands.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    if is_pair_dir(root):
+        return [root]
+
+    out: list[Path] = []
+
+    def walk(folder: Path, depth: int) -> None:
+        if depth > max_depth:
+            return
+        try:
+            children = sorted(p for p in folder.iterdir() if p.is_dir())
+        except OSError:
+            return
+        for child in children:
+            if limit is not None and len(out) >= limit:
+                return
+            if child.name.startswith("."):
+                continue
+            if is_pair_dir(child):
+                out.append(child)
+            else:
+                walk(child, depth + 1)
+
+    walk(root, 1)
+    return out[:limit] if limit is not None else out
+
+
+def pair_has_gt(folder: str | Path) -> bool:
+    """True if a pair directory carries a ground-truth disparity map."""
+    folder = Path(folder)
+    return any(
+        (folder / n).exists() for n in ("disp0GT.pfm", "disp0.pfm")
+    )
+
 
 def _find(folder: Path, stems: tuple[str, ...]) -> Path:
     for stem in stems:

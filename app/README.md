@@ -117,21 +117,49 @@ rebuilds it from the run's data — useful if the run folder changed under it.
 Note that it rebuilds with the code the *running server* imported, so an edit
 to `bench/explain.py` needs `--reload` or a restart before it shows up.
 
-You can also trigger a new batch run:
-pick scenes and algorithms, and it writes to `results/<timestamp>/` exactly
-like `python -m bench run` does, with the same summary and figures. Progress
-polls while it works and it can be cancelled.
+You can also trigger a new batch run. Pick **whole datasets** — one checkbox
+per folder, with each `train`/`val`/`test` subset selectable on its own — or
+switch to **individual pairs** and tick them one at a time. *pairs per
+dataset* caps how many to take from each set: the first N of a fixed order,
+so a quick pass over 20 and the full run later cover the same pairs in the
+same sequence.
+
+The button states the real cell count, resolved by the server rather than
+guessed: picking a set and a subset of it does not run those pairs twice.
+Per-pair PNGs are written automatically for small runs and skipped for large
+ones — a hundred pairs across five algorithms is six hundred images nobody
+looks at — and the checkbox overrides either way.
+
+Output goes to `results/<timestamp>/` exactly like `python -m bench run` does,
+with the same summary and figures. Progress polls while it works and it can be
+cancelled.
 
 ### Datasets
 
-Upload a rectified image pair, optionally with a `.pfm` ground-truth disparity
-map. It lands in `data/custom/<name>/` and appears everywhere the built-in
-scenes do. You can also generate a synthetic pair from a seed — textured
-scene warped by a known disparity field, so the ground truth is exact by
-construction rather than measured.
+**One pair:** upload a rectified image pair, optionally with a `.pfm`
+ground-truth disparity map. It lands in `data/custom/<name>/` and appears
+everywhere the built-in scenes do.
 
-Uploaded pairs must already be **rectified**: matching only searches along a
-row, so any vertical offset between the views is unrecoverable here.
+**A whole dataset:** copy the folder into `data/custom/` and press **rescan**.
+Any shape works — a single pair, a flat folder of samples, or splits with
+samples under them — because a *pair* is just a folder holding `im0`/`im1`
+(or `left`/`right`) images, optionally with `disp0GT.pfm`, `mask0nocc.png` and
+`calib.txt` beside them, and a *dataset* is any folder with pairs below it.
+The **Dataset folders** table lists what was found, how many pairs each holds
+and what its subsets are; **browse** walks the samples.
+
+A dataset folder contributes only its first twelve samples to the scene
+picker — listing twenty thousand would mean decoding twenty thousand images
+to describe them. The rest are reached by the dataset browser at the top of
+the Playground and Compare tabs, which steps through every pair in a set, and
+the whole set is one checkbox in the Runs tab.
+
+You can also generate a synthetic pair from a seed — textured scene warped by
+a known disparity field, so the ground truth is exact by construction rather
+than measured.
+
+Pairs must already be **rectified**: matching only searches along a row, so
+any vertical offset between the views is unrecoverable here.
 
 ### Synthesize
 

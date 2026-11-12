@@ -134,7 +134,25 @@ accuracy/time dial, so it sits in the same table as SGBM's path count.
 | `synthetic[:N]` | warp-generated pairs, **exact** ground truth, no download |
 | `synth:<env>[:N[:difficulty]]` | ray-traced 3-D scenes: exact ground truth **and** true occlusion, no download |
 | `notebooks/practice` (any folder) | a folder with `im0`/`im1`; add `--downscale 6` for the 2964x2000 pair already in the repo |
-| a generated dataset folder | every sample of a set written by `bench synth generate` |
+| any folder with pairs below it | every pair in it — a generated set, one split of one, or a directory of samples copied in by hand |
+
+A **pair** is a folder holding `im0`/`im1` (or `left`/`right`) images, in any
+common format, optionally with `disp0GT.pfm`, `mask0nocc.png` and `calib.txt`
+beside them. A **dataset** is any folder with pairs below it, at whatever
+depth. Nothing has to be reshaped to be usable:
+
+```
+python -m bench run -d data/synth/rooms            # the whole set
+python -m bench run -d data/synth/rooms/test       # one split of it
+python -m bench run -d data/synth/rooms --limit 20 # the first 20 pairs
+```
+
+`--limit` takes a prefix of a fixed order, so a quick pass and the full run
+cover the same pairs in the same sequence and their numbers are comparable.
+
+In the app, drop the folder into `data/custom/` and press **rescan** in the
+Datasets tab. It appears as a dataset — with its subsets listed separately —
+and the Runs tab benchmarks the whole thing from one checkbox.
 
 Each Middlebury scene brings its own disparity range from `calib.txt`, and the
 harness uses it: Jadeplant needs 160 disparities, Teddy needs 64. Giving every

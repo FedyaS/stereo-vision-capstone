@@ -1,6 +1,6 @@
 import type {
-  Algorithm, ComputeResult, Job, RunDetail, RunSummary, Scene,
-  SceneRules, SynthDataset, SynthPreview, SynthSchema,
+  Algorithm, ComputeResult, DatasetCollection, Job, RunDetail, RunSummary,
+  Scene, SceneRules, SynthDataset, SynthPreview, SynthSchema,
 } from './types'
 
 const BASE = '/api'
@@ -28,6 +28,33 @@ export const api = {
   algorithms: () => req<Algorithm[]>('/algorithms'),
   scenes: () => req<Scene[]>('/scenes'),
 
+  /** One scene by id, for pairs the catalogue listing does not include. */
+  scene: (id: string) =>
+    req<Scene>(`/scene?${new URLSearchParams({ id })}`),
+
+  /** Whole datasets, as opposed to the individual pairs `/scenes` lists. */
+  datasets: () => req<DatasetCollection[]>('/datasets'),
+
+  /** The pairs inside one dataset. */
+  datasetScenes: (id: string, limit?: number) => {
+    const q = new URLSearchParams({ id })
+    if (limit != null) q.set('limit', String(limit))
+    return req<{ id: string; scene_ids: string[]; total: number }>(
+      `/dataset/scenes?${q}`,
+    )
+  },
+
+  /** Exactly how many pairs a mixed selection comes to. Resolved by the
+   *  server so the cell count the button promises is the one that runs:
+   *  picking a dataset and a subset of it must not double-count. */
+  resolveSelection: (body: {
+    scene_ids?: string[]
+    dataset_ids?: string[]
+    limit?: number | null
+  }) => req<{ total: number; scene_ids: string[] }>('/datasets/resolve', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+
   compute: (body: {
     scene_id: string
     algorithm: string
@@ -50,7 +77,9 @@ export const api = {
   runFigures: (id: string) => req<string[]>(`/runs/${encodeURIComponent(id)}/figures`),
 
   startBenchmark: (body: {
-    scene_ids: string[]
+    scene_ids?: string[]
+    dataset_ids?: string[]
+    limit?: number | null
     algorithms: string[]
     repeats?: number
     downscale?: number

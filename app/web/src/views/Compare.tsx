@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import { api, resultImageUrl, sceneImageUrl } from '../api'
-import { FamilyDot, ImageTile, ScenePicker, fmt } from '../components'
-import type { Algorithm, ComputeResult, Scene } from '../types'
+import { FamilyDot, ImageTile, SceneSelect, fmt, useScene } from '../components'
+import type {
+  Algorithm, ComputeResult, DatasetCollection, Scene,
+} from '../types'
 
 const THRESHOLDS = [0.5, 1, 2, 4]
 const PRESETS: Record<string, string[]> = {
@@ -24,8 +26,12 @@ const PRESETS: Record<string, string[]> = {
 }
 
 export default function Compare({
-  scenes, algorithms,
-}: { scenes: Scene[]; algorithms: Algorithm[] }) {
+  scenes, algorithms, collections,
+}: {
+  scenes: Scene[]
+  algorithms: Algorithm[]
+  collections: DatasetCollection[]
+}) {
   const [sceneId, setSceneId] = useState('middlebury/Teddy')
   const [downscale, setDownscale] = useState(2)
   const [evalRegion, setEvalRegion] = useState('nonocc')
@@ -36,7 +42,7 @@ export default function Compare({
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
 
-  const scene = scenes.find((s) => s.id === sceneId)
+  const scene = useScene(scenes, sceneId)
   const available = useMemo(
     () => algorithms.filter((a) => a.available),
     [algorithms],
@@ -88,7 +94,10 @@ export default function Compare({
           <h3>Scene</h3>
           <label className="field">
             <span className="lbl"><b>image pair</b></span>
-            <ScenePicker scenes={scenes} value={sceneId} onChange={setSceneId} />
+            <SceneSelect
+              scenes={scenes} collections={collections}
+              value={sceneId} onChange={setSceneId}
+            />
           </label>
           <label className="field">
             <span className="lbl">

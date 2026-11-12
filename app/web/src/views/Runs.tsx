@@ -1,14 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, runFigureUrl, runReportUrl } from '../api'
-import { FamilyDot, fmt, usePoll } from '../components'
+import { DatasetPicker, FamilyDot, fmt, usePoll } from '../components'
 import TradeoffChart from '../TradeoffChart'
-import type { Algorithm, Job, RunDetail, RunRow, RunSummary, Scene } from '../types'
+import type {
+  Algorithm, DatasetCollection, Job, RunDetail, RunRow, RunSummary, Scene,
+} from '../types'
+
+/** Caps on how many pairs to take from each selected dataset. A first pass
+ *  over 20 of a 2,000-pair set answers "does this algorithm work here" in a
+ *  minute instead of an afternoon; the whole set is for the number you
+ *  report. */
+const LIMITS: (number | null)[] = [5, 10, 20, 50, 100, 250, null]
+
+/** Above this many pairs, per-pair PNGs stop being something anyone looks at
+ *  and start being thousands of files. The checkbox still overrides it. */
+const FIGURE_AUTO_LIMIT = 24
 
 type SortKey = string
 
 export default function Runs({
-  scenes, algorithms,
-}: { scenes: Scene[]; algorithms: Algorithm[] }) {
+  scenes, algorithms, collections,
+}: {
+  scenes: Scene[]
+  algorithms: Algorithm[]
+  collections: DatasetCollection[]
+}) {
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [detail, setDetail] = useState<RunDetail | null>(null)
@@ -19,10 +35,20 @@ export default function Runs({
   const [error, setError] = useState<string | null>(null)
 
   // batch-run form
+  const [mode, setMode] = useState<'datasets' | 'pairs'>('datasets')
   const [pickScenes, setPickScenes] = useState<string[]>([])
+  const [pickDatasets, setPickDatasets] = useState<string[]>([])
+  const [limitIndex, setLimitIndex] = useState(LIMITS.length - 1)
+  const [sceneFilter, setSceneFilter] = useState('')
   const [pickAlgos, setPickAlgos] = useState<string[]>([])
   const [downscale, setDownscale] = useState(2)
   const [repeats, setRepeats] = useState(1)
+  // null = follow FIGURE_AUTO_LIMIT; a boolean once the user has decided.
+  const [figuresChoice, setFiguresChoice] = useState<boolean | null>(null)
+  const [resolved, setResolved] = useState(0)
+  const [resolving, setResolving] = useState(false)
+
+  const limit = LIMITS[limitIndex]
 
   const refreshRuns = useCallback(() => {
     api.runs().then(setRuns).catch((e) => setError(String(e)))
@@ -38,6 +64,32 @@ export default function Runs({
     refreshJobs()
     if (!anyRunning) refreshRuns()
   }, 1500, anyRunning)
+
+  /* How many pairs the current selection actually comes to. Asked of the
+     server rather than counted here: a dataset and one of its subsets can
+     both be selected, and only the server's dedupe knows the real total --
+     the button must not promise a number the run then disagrees with. */
+  const selectionKey = JSON.stringify([pickScenes, pickDatasets, limit])
+  useEffect(() => {
+    const scene_ids = JSON.parse(selectionKey)[0] as string[]
+    const dataset_ids = JSON.parse(selectionKey)[1] as string[]
+    if (!scene_ids.length && !dataset_ids.length) {
+      setResolved(0); setResolving(false); return
+    }
+    let live = true
+    setResolving(true)
+    const t = setTimeout(() => {
+      api.resolveSelection({
+        scene_ids, dataset_ids, limit: JSON.parse(selectionKey)[2],
+      })
+        .then((r) => { if (live) setResolved(r.total) })
+        .catch((e) => {
+          if (live) { setResolved(0); setError(e instanceof Error ? e.message : String(e)) }
+        })
+        .finally(() => { if (live) setResolving(false) })
+    }, 180)
+    return () => { live = false; clearTimeout(t) }
+  }, [selectionKey])
 
   useEffect(() => {
     if (!selected) { setDetail(null); setFigures([]); return }
@@ -95,21 +147,33 @@ export default function Runs({
     else { setSortKey(k); setAsc(true) }
   }
 
+  const saveFigures = figuresChoice ?? resolved <= FIGURE_AUTO_LIMIT
+
   const startRun = async () => {
     setError(null)
     try {
       await api.startBenchmark({
         scene_ids: pickScenes,
+        dataset_ids: pickDatasets,
+        limit,
         algorithms: pickAlgos,
         repeats,
         downscale,
-        save_figures: true,
+        save_figures: saveFigures,
       })
       refreshJobs()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
   }
+
+  const visibleScenes = useMemo(() => {
+    const q = sceneFilter.trim().toLowerCase()
+    if (!q) return scenes
+    return scenes.filter(
+      (s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q),
+    )
+  }, [scenes, sceneFilter])
 
   /* The accuracy/time PNG is still written to the run folder, but the
      explorer below supersedes it in the UI -- showing both invites the
@@ -132,33 +196,100 @@ export default function Runs({
       <div>
         <div className="card">
           <h3>Trigger a benchmark</h3>
-          <div className="row-between" style={{ marginBottom: 6 }}>
-            <span className="muted" style={{ fontSize: 12 }}>
-              scenes ({pickScenes.length})
-            </span>
-            <div className="card-row">
-              <button
-                className="ghost small"
-                onClick={() => setPickScenes(scenes.filter((s) => s.has_gt).map((s) => s.id))}
-              >all with GT</button>
-              <button className="ghost small" onClick={() => setPickScenes([])}>
-                clear
-              </button>
-            </div>
+
+          <div className="seg" style={{ marginBottom: 8 }}>
+            <button
+              className={mode === 'datasets' ? 'on' : ''}
+              onClick={() => setMode('datasets')}
+            >whole datasets</button>
+            <button
+              className={mode === 'pairs' ? 'on' : ''}
+              onClick={() => setMode('pairs')}
+            >individual pairs</button>
           </div>
-          <div className="scroll-list pick-list" style={{ maxHeight: 150 }}>
-            {scenes.map((s) => (
-              <label key={s.id} className={`pick ${pickScenes.includes(s.id) ? 'on' : ''}`}>
+
+          {mode === 'datasets' ? (
+            <>
+              <div className="row-between" style={{ marginBottom: 6 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  datasets ({pickDatasets.length})
+                </span>
+                <div className="card-row">
+                  <button
+                    className="ghost small"
+                    onClick={() => setPickDatasets(
+                      collections.filter((c) => c.has_gt).map((c) => c.id),
+                    )}
+                  >all with GT</button>
+                  <button className="ghost small" onClick={() => setPickDatasets([])}>
+                    clear
+                  </button>
+                </div>
+              </div>
+              <DatasetPicker
+                collections={collections}
+                picked={pickDatasets}
+                onChange={setPickDatasets}
+              />
+              <label className="field" style={{ marginTop: 8 }}>
+                <span className="lbl">
+                  <b>pairs per dataset</b>
+                  <span className="val">{limit ?? 'all'}</span>
+                </span>
                 <input
-                  type="checkbox"
-                  checked={pickScenes.includes(s.id)}
-                  onChange={() => setPickScenes((p) =>
-                    p.includes(s.id) ? p.filter((x) => x !== s.id) : [...p, s.id])}
+                  type="range" min={0} max={LIMITS.length - 1} step={1}
+                  value={limitIndex}
+                  onChange={(e) => setLimitIndex(Number(e.target.value))}
                 />
-                {s.name} <span className="muted">{s.kind}</span>
+                <div className="hint">
+                  Takes the first N pairs of each selected set, in the same
+                  order every time — a quick pass before committing to the
+                  whole thing.
+                </div>
               </label>
-            ))}
-          </div>
+            </>
+          ) : (
+            <>
+              <div className="row-between" style={{ marginBottom: 6 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  pairs ({pickScenes.length})
+                </span>
+                <div className="card-row">
+                  <button
+                    className="ghost small"
+                    onClick={() => setPickScenes(
+                      visibleScenes.filter((s) => s.has_gt).map((s) => s.id),
+                    )}
+                  >all with GT</button>
+                  <button className="ghost small" onClick={() => setPickScenes([])}>
+                    clear
+                  </button>
+                </div>
+              </div>
+              <input
+                type="text" value={sceneFilter} placeholder="filter by name…"
+                style={{ width: '100%', marginBottom: 6 }}
+                onChange={(e) => setSceneFilter(e.target.value)}
+              />
+              <div className="scroll-list pick-list" style={{ maxHeight: 190 }}>
+                {visibleScenes.map((s) => (
+                  <label key={s.id} className={`pick ${pickScenes.includes(s.id) ? 'on' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={pickScenes.includes(s.id)}
+                      onChange={() => setPickScenes((p) =>
+                        p.includes(s.id) ? p.filter((x) => x !== s.id) : [...p, s.id])}
+                    />
+                    {s.name} <span className="muted">{s.kind}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                A dataset folder lists only its first few samples here. To run
+                on all of it, switch to <b>whole datasets</b>.
+              </div>
+            </>
+          )}
 
           <div className="row-between" style={{ margin: '10px 0 6px' }}>
             <span className="muted" style={{ fontSize: 12 }}>
@@ -208,14 +339,40 @@ export default function Runs({
               onChange={(e) => setRepeats(Number(e.target.value))}
             />
           </label>
+          <label className="pick" style={{ marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={saveFigures}
+              onChange={(e) => setFiguresChoice(e.target.checked)}
+            />
+            save per-pair images
+            <span className="muted" style={{ fontSize: 11 }}>
+              {figuresChoice === null ? ' (auto)' : ''}
+            </span>
+          </label>
           <button
             className="primary" style={{ width: '100%' }}
             onClick={() => void startRun()}
-            disabled={!pickScenes.length || !pickAlgos.length}
+            disabled={!resolved || !pickAlgos.length || resolving}
           >
-            run {pickScenes.length * pickAlgos.length} cells
+            {resolving
+              ? 'resolving…'
+              : `run ${resolved * pickAlgos.length} cells`}
           </button>
           <div className="hint" style={{ marginTop: 7 }}>
+            {resolved > 0 && (
+              <>
+                {resolved} pair{resolved === 1 ? '' : 's'} ×{' '}
+                {pickAlgos.length} algorithm{pickAlgos.length === 1 ? '' : 's'}
+                {saveFigures && resolved > FIGURE_AUTO_LIMIT && (
+                  <>
+                    {' '}— that is {resolved * pickAlgos.length + resolved} PNGs;
+                    untick <b>save per-pair images</b> for the numbers alone.
+                  </>
+                )}
+                <br />
+              </>
+            )}
             Writes to <span className="mono">results/&lt;timestamp&gt;/</span> exactly
             like the CLI, with the same summary and figures.
           </div>

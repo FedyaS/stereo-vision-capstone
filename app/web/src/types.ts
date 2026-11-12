@@ -37,6 +37,23 @@ export interface Scene {
   error?: string
 }
 
+/** A whole dataset: a folder with stereo pairs below it, at any depth.
+ *  Counts come from the directory tree, so this is cheap to list even for a
+ *  set with thousands of pairs — but it carries no image size, because
+ *  reporting one would mean decoding a pair. */
+export interface DatasetCollection {
+  id: string
+  kind: string
+  name: string
+  count: number
+  /** Sample groups inside the set — `train`/`val`/`test` and the like.
+   *  Empty for a flat folder. */
+  splits: Record<string, number>
+  has_gt: boolean
+  ndisp: number | null
+  path: string
+}
+
 export interface Timing {
   wall_s: number | null
   wall_s_min: number | null

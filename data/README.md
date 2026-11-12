@@ -46,6 +46,30 @@ Jadeplant needs 160 disparities, Teddy 64.
 - any folder with `im0`/`im1` (or `left`/`right`), e.g. the full-resolution
   pair in `notebooks/practice/`:
   `python -m bench run -d notebooks/practice --downscale 6`.
+- any folder with such pairs *below* it, at whatever depth: a generated set,
+  one split of one, or a dataset copied in by hand that keeps its own folder
+  structure. Pairs are discovered by walking the tree, so nothing has to be
+  flattened or renamed first.
+
+## Adding a dataset of your own
+
+Copy it into `data/custom/`:
+
+```
+data/custom/<name>/            one pair: im0.png, im1.png, ...
+data/custom/<name>/00000/      a flat set of samples
+data/custom/<name>/test/00000/ splits, and anything nested like this
+```
+
+Then press **rescan** in the app's Datasets tab, or point the CLI at it:
+
+```
+python -m bench run -d data/custom/<name> -a opencv_sgbm
+python -m bench run -d data/custom/<name>/test --limit 20
+```
+
+Ground truth is optional. Without it you still get timing, resource numbers
+and the output maps -- just no accuracy.
 
 ## What is committed here
 

@@ -6,6 +6,12 @@ which is which:
 ``middlebury/Teddy``   a downloaded benchmark scene
 ``synthetic/seed3``    generated on demand, exact ground truth, no download
 ``custom/<name>``      a folder the user added through the UI
+``custom/<name>/<rel>`` one pair inside a dataset folder the user added
+
+The same id scheme addresses whole *collections* -- a folder of many pairs
+rather than one pair -- so ``custom/my-set`` or ``synth/room/test`` names a
+dataset that :func:`expand` turns into the scene ids it contains. That is
+what lets the UI offer "run on this dataset" beside "run on this pair".
 
 Loaded pairs are cached, because every parameter tweak in the playground
 re-runs matching on the same images and re-decoding a 741x497 PNG pair each
@@ -16,17 +22,24 @@ from __future__ import annotations
 import re
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import numpy as np
 
 from bench.datasets import list_middlebury_scenes, load_middlebury_scene
-from bench.datasets.local import load_image_pair
+from bench.datasets.local import (
+    find_pair_dirs,
+    is_pair_dir,
+    load_image_pair,
+    pair_has_gt,
+)
 from bench.datasets.synthetic import make_synthetic_pair
 from bench.paths import CUSTOM_DATA_DIR as CUSTOM_ROOT
+from bench.paths import MIDDLEBURY_DIR
 from bench.paths import REPO_ROOT
 from bench.paths import SYNTH_DATA_DIR
+from bench.paths import describe as _describe_path
 from bench.types import StereoPair
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
@@ -61,20 +74,35 @@ def safe_name(name: str) -> str:
 
 
 def list_custom() -> list[str]:
+    """Names of single-pair datasets directly under ``data/custom``.
+
+    A folder holding *many* pairs is not one of these -- it is a collection,
+    listed by :func:`list_collections` -- so the Datasets tab can keep
+    offering "delete this pair" for uploads without offering it for a
+    hundred-pair set the user copied in.
+    """
     if not CUSTOM_ROOT.is_dir():
         return []
     return sorted(
-        d.name
-        for d in CUSTOM_ROOT.iterdir()
-        if d.is_dir() and any((d / f"im0{e}").exists() for e in (".png", ".jpg"))
+        d.name for d in CUSTOM_ROOT.iterdir() if d.is_dir() and is_pair_dir(d)
     )
 
 
-#: How many samples of each generated dataset to expose as individually
+#: How many samples of each dataset folder to expose as individually
 #: selectable scenes. A generated set can hold thousands of pairs, and a
-#: picker listing all of them is unusable; a batch run over the whole set is
-#: what the Runs tab is for.
+#: picker listing all of them is unusable; selecting the *collection* and
+#: running a batch over it is what the Runs tab is for.
 SYNTH_SAMPLES_LISTED = 12
+
+def _collection_roots() -> dict[str, Path]:
+    """Where each collection kind lives on disk.
+
+    A function rather than a module-level dict because the path constants are
+    read at call time on purpose (see :mod:`bench.paths`): a test redirects
+    ``SYNTH_DATA_DIR`` with ``monkeypatch.setattr`` and a dict built at import
+    time would never see it.
+    """
+    return {"custom": CUSTOM_ROOT, "synth": SYNTH_DATA_DIR}
 
 
 def list_synth_datasets() -> list[str]:
@@ -88,18 +116,211 @@ def list_synth_datasets() -> list[str]:
     )
 
 
+def _resolve_within(root: Path, rest: str) -> Path:
+    """Turn the part of an id after the kind into a path inside ``root``.
+
+    ``safe_name`` guards the first segment and the containment check guards
+    the rest, so a crafted id such as ``custom/x/../../../etc`` cannot
+    address anything outside the dataset root.
+    """
+    parts = [
+        part for part in PurePosixPath(rest).parts if part not in ("", ".", "/")
+    ]
+    if not parts or any(part == ".." for part in parts):
+        raise ValueError(f"bad dataset path {rest!r}")
+    safe_name(parts[0])
+    folder = root.joinpath(*parts)
+    if not folder.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"bad dataset path {rest!r}")
+    return folder
+
+
+def _collection_row(
+    kind: str, root: Path, folder: Path, dirs: list[Path]
+) -> dict[str, Any]:
+    """One row of the collection listing, built without decoding any image.
+
+    Counting pairs and reading one ``calib.txt`` is a few hundred stat calls;
+    decoding a pair is tens of milliseconds. A dataset list has to stay
+    instant even when a set holds thousands of samples, so nothing here opens
+    an image.
+    """
+    rel = folder.relative_to(root).as_posix()
+    groups: dict[str, int] = {}
+    for d in dirs:
+        parent = d.parent
+        key = parent.relative_to(folder).as_posix() if parent != folder else ""
+        groups[key] = groups.get(key, 0) + 1
+    ndisp = None
+    if dirs:
+        calib = dirs[0] / "calib.txt"
+        if calib.is_file():
+            from bench.datasets.middlebury import parse_calib
+
+            try:
+                ndisp = int(parse_calib(calib).get("ndisp") or 0) or None
+            except Exception:
+                ndisp = None
+    return {
+        "id": f"{kind}/{rel}" if rel else kind,
+        "kind": kind,
+        "name": rel or kind,
+        "count": len(dirs),
+        # Only meaningful when the samples sit in subfolders; a flat set
+        # reports {} rather than {"": n}, which would read in the UI as a
+        # split named after the empty string.
+        "splits": {k: v for k, v in sorted(groups.items()) if k},
+        "has_gt": bool(dirs) and pair_has_gt(dirs[0]),
+        "ndisp": ndisp,
+        "path": _describe_path(folder),
+    }
+
+
+def list_collections() -> list[dict[str, Any]]:
+    """Every dataset that holds more than one pair, plus its subsets.
+
+    A collection is any folder under ``data/custom`` or ``data/synth`` with
+    stereo pairs below it, at whatever depth -- which is the whole point: a
+    dataset copied in by hand is addressable without having to be reshaped
+    into the layout the uploader happens to write.
+
+    For each one this reports the whole set *and* each group of samples
+    beneath it, so a generated set with ``train``/``val``/``test`` offers all
+    four as separate things to run on. Reporting numbers on the subset you
+    also tuned on is the easiest way to fool yourself, so the split has to be
+    selectable, not just the whole.
+
+    Built-in sources are listed the same way, so "all Middlebury scenes" is
+    one checkbox rather than fifteen.
+    """
+    out: list[dict[str, Any]] = []
+
+    scenes = list_middlebury_scenes()
+    if scenes:
+        out.append({
+            "id": "middlebury",
+            "kind": "middlebury",
+            "name": "all Middlebury scenes",
+            "count": len(scenes),
+            "splits": {},
+            "has_gt": True,
+            "ndisp": None,
+            "path": _describe_path(MIDDLEBURY_DIR / "trainingQ"),
+        })
+
+    seeds = list(_DEFAULT_SEEDS) + sorted(_extra_seeds)
+    out.append({
+        "id": "synthetic",
+        "kind": "synthetic",
+        "name": "warp-based synthetic pairs",
+        "count": len(seeds),
+        "splits": {},
+        "has_gt": True,
+        "ndisp": 64,
+        "path": "generated in memory",
+    })
+
+    for kind, root in _collection_roots().items():
+        if not root.is_dir():
+            continue
+        by_id: dict[str, dict[str, Any]] = {}
+        for top in sorted(d for d in root.iterdir() if d.is_dir()):
+            if top.name.startswith(".") or is_pair_dir(top):
+                continue  # a single uploaded pair, not a collection
+            dirs = find_pair_dirs(top)
+            if not dirs:
+                continue
+            row = _collection_row(kind, root, top, dirs)
+            by_id[row["id"]] = row
+            # Each group of samples as its own selectable subset. For a flat
+            # set that group is the set itself, which dedupes on the id.
+            for group in sorted({d.parent for d in dirs}):
+                if group == top:
+                    continue
+                members = [d for d in dirs if d.parent == group]
+                sub = _collection_row(kind, root, group, members)
+                by_id.setdefault(sub["id"], sub)
+        out.extend(by_id[k] for k in sorted(by_id))
+
+    return out
+
+
+def expand(dataset_id: str, *, limit: int | None = None) -> list[str]:
+    """The scene ids a dataset id stands for, in a stable order.
+
+    A plain scene id expands to itself, so callers never need to know whether
+    what the user picked was one pair or a thousand.
+    """
+    kind, _, rest = dataset_id.partition("/")
+    if kind == "middlebury":
+        names = [rest] if rest else list_middlebury_scenes()
+        ids = [f"middlebury/{n}" for n in names]
+    elif kind == "synthetic":
+        if rest:
+            ids = [dataset_id]
+        else:
+            seeds = list(_DEFAULT_SEEDS) + sorted(_extra_seeds)
+            ids = [f"synthetic/seed{i}" for i in seeds]
+    elif kind in _collection_roots():
+        root = _collection_roots()[kind]
+        folder = _resolve_within(root, rest)
+        if not folder.is_dir():
+            raise FileNotFoundError(f"no dataset at {dataset_id!r}")
+        dirs = find_pair_dirs(folder, limit=limit)
+        if not dirs:
+            raise FileNotFoundError(
+                f"{dataset_id!r} holds no stereo pair. A pair is a folder "
+                f"with im0/im1 (or left/right) images in it."
+            )
+        ids = [f"{kind}/{d.relative_to(root).as_posix()}" for d in dirs]
+    else:
+        raise ValueError(f"unknown dataset id {dataset_id!r}")
+    return ids[:limit] if limit else ids
+
+
+def resolve_selection(
+    scenes: list[str] | None = None,
+    datasets: list[str] | None = None,
+    *,
+    limit: int | None = None,
+) -> list[str]:
+    """Flatten a mixed selection of pairs and whole datasets into scene ids.
+
+    Order is the order picked and duplicates are dropped: selecting both a
+    dataset and one of its pairs must not benchmark that pair twice.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for sid in list(scenes or []):
+        if sid not in seen:
+            seen.add(sid)
+            out.append(sid)
+    for did in list(datasets or []):
+        for sid in expand(did, limit=limit):
+            if sid not in seen:
+                seen.add(sid)
+                out.append(sid)
+    return out
+
+
 def scene_ids() -> list[str]:
+    """Individually selectable scenes.
+
+    Dataset folders contribute only their first :data:`SYNTH_SAMPLES_LISTED`
+    samples. Listing every sample of a 20,000-pair set would have this
+    endpoint decode 20,000 images to describe them, and produce a picker
+    nobody can scroll; the whole set stays selectable as a collection.
+    """
     ids = [f"middlebury/{s}" for s in list_middlebury_scenes()]
     ids += [f"custom/{s}" for s in list_custom()]
-    for name in list_synth_datasets():
-        root = SYNTH_DATA_DIR / name
-        # Via the shared helper, so a split dataset (train/00000) lists just
-        # as well as a flat one (00000). The relative path becomes part of
-        # the scene id, which keeps ids unique across splits.
-        from bench.datasets import synth_sample_dirs
-
-        for d in synth_sample_dirs(root)[:SYNTH_SAMPLES_LISTED]:
-            ids.append(f"synth/{name}/{d.relative_to(root).as_posix()}")
+    for kind, root in _collection_roots().items():
+        if not root.is_dir():
+            continue
+        for top in sorted(d for d in root.iterdir() if d.is_dir()):
+            if top.name.startswith(".") or is_pair_dir(top):
+                continue
+            for d in find_pair_dirs(top, limit=SYNTH_SAMPLES_LISTED):
+                ids.append(f"{kind}/{d.relative_to(root).as_posix()}")
     seeds = list(_DEFAULT_SEEDS) + sorted(_extra_seeds)
     ids += [f"synthetic/seed{i}" for i in seeds]
     return ids
@@ -119,7 +340,9 @@ def load(scene_id: str, *, downscale: float = 1.0) -> StereoPair:
         pair = make_synthetic_pair(seed=seed, size=(320, 448), ndisp=64)
         pair.name = scene_id
     elif kind == "custom":
-        folder = CUSTOM_ROOT / safe_name(rest)
+        # ``custom/<name>`` for an uploaded pair, ``custom/<name>/<rel>`` for
+        # one sample of a dataset folder the user copied in.
+        folder = _resolve_within(CUSTOM_ROOT, rest)
         if not folder.is_dir():
             raise FileNotFoundError(f"no custom dataset named {rest!r}")
         pair = load_image_pair(folder, name=scene_id)
@@ -127,16 +350,7 @@ def load(scene_id: str, *, downscale: float = 1.0) -> StereoPair:
         # synth/<dataset>/<sample> or synth/<dataset>/<split>/<sample>,
         # written by the synthesizer in the Middlebury layout, so the
         # ordinary folder loader reads it.
-        dataset, _, sample = rest.partition("/")
-        root = SYNTH_DATA_DIR / safe_name(dataset)
-        parts = [p for p in Path(sample).parts if p not in ("", ".", "..")]
-        if not parts or len(parts) > 2:
-            raise ValueError(f"bad generated sample id {scene_id!r}")
-        folder = root.joinpath(*parts)
-        # Containment check: `safe_name` guards the dataset, and this guards
-        # the rest of the path, so a crafted id cannot escape data/synth.
-        if not folder.resolve().is_relative_to(root.resolve()):
-            raise ValueError(f"bad generated sample id {scene_id!r}")
+        folder = _resolve_within(SYNTH_DATA_DIR, rest)
         if not folder.is_dir():
             raise FileNotFoundError(f"no generated sample {rest!r}")
         pair = load_image_pair(folder, name=scene_id)
