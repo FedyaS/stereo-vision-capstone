@@ -466,6 +466,10 @@ class ScratchMatcher:
     lr_check: bool = False
     max_volume_gb: float = 4.0
 
+    # in the dataclass fields
+    fill: bool = False
+    fill_median: int = 0   # optional edge-agnostic smoothing, odd kernel size; 0 = off
+
     def compute(self, pair: StereoPair) -> DisparityResult:
         cost = cost_volume(
             pair.left,
@@ -517,9 +521,16 @@ class ScratchMatcher:
             extra["lr_reject_frac"] = float((valid & ~consistent).mean())
             valid &= consistent
 
-        return DisparityResult(
-            np.where(valid, disp, np.nan).astype(np.float32), valid, extra
-        )
+        # fill option
+        disp = np.where(valid, disp, np.nan).astype(np.float32)
+        if self.fill:
+            from ..metrics import fill_holes
+            disp = fill_holes(disp, valid)
+            if self.fill_median:
+                import cv2
+                disp = cv2.medianBlur(disp, self.fill_median)
+            valid = np.ones_like(valid)
+        return DisparityResult(disp, valid, extra)
 
 
 def _entry(name: str, blurb: str, tags: tuple[str, ...], **kw):
@@ -628,6 +639,13 @@ _entry(
     p1=20.0,
     p2=90.0,
     lr_check=True,
+)
+_entry(
+    "scratch_census_sgm8_lrfill",
+    "Census + 8-path SGM + left-right check + scanline hole filling (dense)",
+    ("global", "sgm", "census", "validated", "filled"),
+    metric="census", block=5, aggregation="sgm8",
+    p1=20.0, p2=90.0, lr_check=True, fill=True,
 )
 _entry(
     "scratch_sad_sgm8",
